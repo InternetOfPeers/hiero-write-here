@@ -1,0 +1,16 @@
+{
+  "name": "write-here",
+  "version": "1.0.0",
+  "description": "Hedera encrypted messaging using topics",
+  "license": "MIT",
+  "author": "",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "@hashgraph/sdk": "^2.49.2"
+  }
+}
