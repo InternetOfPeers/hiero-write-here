@@ -1,16 +1,18 @@
 {
-  "name": "write-here",
+  "name": "hiero-write-here",
   "version": "1.0.0",
-  "description": "Hedera encrypted messaging using topics",
+  "description": "Hedera account encrypted messaging using topics",
   "license": "MIT",
   "author": "",
   "type": "commonjs",
-  "main": "index.js",
+  "main": "listen.js",
   "scripts": {
-    "start": "node index.js",
+    "start": "node src/listen.js",
+    "listen": "node src/listen.js",
+    "send": "node src/send.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
-    "@hashgraph/sdk": "^2.49.2"
+    "@hashgraph/sdk": "^2.76.0"
   }
 }
