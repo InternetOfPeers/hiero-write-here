@@ -1,18 +1,24 @@
 {
-  "name": "hiero-write-here",
+  "name": "hiero-message-box",
   "version": "1.0.0",
-  "description": "Hedera account encrypted messaging using topics",
+  "description": "Simple encrypted messaging system for Hedera accounts",
   "license": "MIT",
-  "author": "",
+  "author": "Giuseppe Bertone <giuseppe.bertone@proton.me>",
   "type": "commonjs",
-  "main": "listen.js",
   "scripts": {
-    "start": "node src/listen.js",
-    "listen": "node src/listen.js",
-    "send": "node src/send.js",
+    "start": "npm run setup-message-box && npm run listen-for-new-messages",
+    "setup-message-box": "node src/setup-message-box.js",
+    "listen-for-new-messages": "node src/listen-for-new-messages.js",
+    "check-messages": "node src/check-messages.js",
+    "send-message": "node src/send-message.js",
+    "remove-message-box": "node src/remove-message-box.js",
+    "format": "prettier --write \"src/**/*.js\"",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
     "@hashgraph/sdk": "^2.76.0"
+  },
+  "devDependencies": {
+    "prettier": "^3.6.2"
   }
 }

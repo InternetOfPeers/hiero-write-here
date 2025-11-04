@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+build/
+
+# Database files
+**/*.db
+**/*.sqlite
+
+# Data files
+data/
+**/data/*.json
+**/data/*.db
+
+# Log files
+*.log
+**/*.log
+
+# Environment files
+.env
+.env.*
+
+# Coverage
+coverage/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+
+# Temporary files
+*.tmp
+*.temp
+
+# Package lock files (let npm handle formatting)
+package-lock.json
+yarn.lock
