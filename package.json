@@ -1,5 +1,6 @@
 {
   "name": "hiero-message-box",
+  "homepage": "https://github.com/InternetOfPeers/hiero-message-box",
   "version": "1.0.0",
   "description": "Simple encrypted messaging system for Hedera accounts",
   "license": "MIT",

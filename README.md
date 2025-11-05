@@ -7,7 +7,7 @@ The repo contains the code both for the sender and the receiver.
 The goal is to enable users to send encrypted messages to an account's message box just like this:
 
 ```bash
-npm run send-message 0.0.1441 "This is a secret message for you"
+npm run send-message -- 0.0.1441 "This is a secret message for you"
 ```
 
 Users can listen for new messages in real-time using this command:
@@ -19,7 +19,7 @@ npm run listen-for-new-messages
 Users can also check for historical messages using this command:
 
 ```bash
-npm run check-messages [start-sequence] [end-sequence]
+npm run check-messages -- [start-sequence] [end-sequence]
 ```
 
 
@@ -38,8 +38,9 @@ To avoid spam, users can decide to set a paid topic as their message box.
 - **Key Verification**: Automatically verifies local keys match the topic's public key
 - **Mirror Node API**: Uses Hedera Mirror Node for reliable message polling and topic verification
 - **Real-time Listening**: Continuously polls for new encrypted messages every 3 seconds
+- **Message Formats**: Supports both JSON and CBOR encoding formats for flexibility
 - **Modular Architecture**: Common functions extracted for reusability and maintainability
-- **Minimal Dependencies**: Uses only Hashgraph SDK v2.76.0 and native Node.js functions
+- **Minimal External Dependencies**: Uses only Hashgraph SDK v2.76.0 and native Node.js functions
 
 ## Prerequisites
 
@@ -130,7 +131,7 @@ Press `Ctrl+C` to stop listening.
 Retrieve and read messages from your message box in a specific range:
 
 ```bash
-npm run check-messages [start-sequence] [end-sequence]
+npm run check-messages -- [start-sequence] [end-sequence]
 ```
 
 **Examples:**
@@ -140,7 +141,7 @@ npm run check-messages [start-sequence] [end-sequence]
 npm run check-messages
 
 # Get all messages from sequence 5 onwards
-npm run check-messages 5
+npm run check-messages -- 5
 
 # Get messages from sequence 5 to 10 (inclusive)
 npm run check-messages 5 10
@@ -166,14 +167,40 @@ This is useful for:
 Send an encrypted message to another account:
 
 ```bash
-npm run send-message <account-id> <message>
+npm run send-message -- <account-id> <message> [--cbor]
 ```
 
-**Example:**
+**Note:** When using `npm run`, you must include `--` before the arguments to separate npm options from script arguments.
+
+**Examples:**
 
 ```bash
-npm run send-message 0.0.1441 "Hello, this is a secret message!"
+# Send message with JSON format (default)
+npm run send-message -- 0.0.1441 "Hello, this is a secret message!"
+
+# Send message with CBOR format
+npm run send-message -- 0.0.1441 "Hello, this is a secret message!" --cbor
+
+# Alternative: run directly with node (no -- needed)
+node src/send-message.js 0.0.1441 "Hello, this is a secret message!" --cbor
 ```
+
+#### Message Formats
+
+The application supports two message encoding formats:
+
+1. **JSON (default)**: Human-readable, widely supported format
+   - Pros: Easy to debug, universally compatible
+   - Cons: Larger payload size due to text encoding
+   - Best for: Text messages, debugging, maximum compatibility
+
+2. **CBOR (optional)**: Concise Binary Object Representation
+   - Pros: Compact binary format, ~30-40% smaller payload size
+   - Cons: Not human-readable in raw form
+   - Best for: Large messages, high-volume messaging, efficient storage
+   - Specification: [RFC 8949](https://datatracker.ietf.org/doc/html/rfc8949)
+
+Both formats are automatically detected and decoded when reading messages.
 
 #### How it works
 
@@ -182,9 +209,10 @@ npm run send-message 0.0.1441 "Hello, this is a secret message!"
 3. Generates a random AES-256 key
 4. Encrypts the message with AES (fast, suitable for large messages)
 5. Encrypts the AES key with the recipient's RSA public key
-6. Sends the encrypted payload to the topic as a JSON message with type `ENCRYPTED_MESSAGE`
+6. Encodes the encrypted payload as JSON (default) or CBOR (if --cbor flag is used)
+7. Sends the encoded payload to the topic with type `ENCRYPTED_MESSAGE`
 
-The recipient will automatically decrypt and display the message when polling.
+The recipient will automatically detect the format, decrypt, and display the message when polling.
 
 ### Remove Message Box
 
@@ -321,6 +349,7 @@ The codebase is organized into three main modules:
 1. **`lib/common.js`**: Utility functions
    - Environment variable loading from `.env` file
    - Hybrid encryption/decryption (AES-256 + RSA-2048)
+   - Custom CBOR encoder/decoder implementation (RFC 8949 compliant)
 
 2. **`lib/hedera.js`**: Hedera blockchain operations
    - Client initialization (testnet/mainnet)
@@ -332,8 +361,9 @@ The codebase is organized into three main modules:
    - Message box setup with key verification
    - RSA key pair generation and management
    - Public key publishing and retrieval
-   - Message encryption and sending
+   - Message encryption and sending (JSON/CBOR formats)
    - Real-time message polling with sequence tracking
+   - Automatic format detection and decoding
 
 ### Mirror Node API Usage
 
@@ -352,9 +382,9 @@ This application uses the Hedera Mirror Node REST API for all query operations:
 
 ### Message Format
 
-All messages submitted to the topic are JSON objects with a `type` field:
+All messages submitted to the topic use either JSON or CBOR encoding with a `type` field:
 
-**Public Key Message** (first message in topic):
+**Public Key Message** (first message in topic, always JSON):
 
 ```json
 {
@@ -363,11 +393,12 @@ All messages submitted to the topic are JSON objects with a `type` field:
 }
 ```
 
-**Encrypted Message**:
+**Encrypted Message (JSON format)**:
 
 ```json
 {
   "type": "ENCRYPTED_MESSAGE",
+  "format": "json",
   "data": {
     "encryptedMessage": "base64...",
     "encryptedKey": "base64...",
@@ -375,6 +406,28 @@ All messages submitted to the topic are JSON objects with a `type` field:
   }
 }
 ```
+
+**Encrypted Message (CBOR format)**:
+
+CBOR-encoded binary data with the same structure:
+
+```javascript
+{
+  type: "ENCRYPTED_MESSAGE",
+  format: "cbor",
+  data: {
+    encryptedMessage: <Buffer...>,
+    encryptedKey: <Buffer...>,
+    iv: <Buffer...>
+  }
+}
+```
+
+When reading messages, the application automatically detects the format by analyzing the first byte:
+
+- CBOR: Major type 0-7 in first byte (binary format)
+- JSON: Starts with `{` or `[` (text format)
+- Plain text: Fallback for unrecognized formats
 
 ### Key Verification System
 
@@ -432,14 +485,16 @@ This allows the listener to:
 ## Available NPM Scripts
 
 ```bash
-npm start                          # Setup message box + start listening
-npm run setup-message-box          # Setup/verify message box configuration
-npm run listen-for-new-messages    # Start polling for new messages
-npm run check-messages [start] [end] # Read message history (defaults to all messages)
-npm run send-message <id> <msg>    # Send encrypted message to account
-npm run remove-message-box         # Remove message box (clear account memo)
-npm run format                     # Format code with Prettier
+npm start                                   # Setup message box + start listening
+npm run setup-message-box                   # Setup/verify message box configuration
+npm run listen-for-new-messages             # Start polling for new messages
+npm run check-messages -- [start] [end]     # Read message history (defaults to all messages)
+npm run send-message -- <id> <msg> [--cbor] # Send encrypted message to account
+npm run remove-message-box                  # Remove message box (clear account memo)
+npm run format                              # Format code with Prettier
 ```
+
+**Note:** Use `--` to separate npm options from script arguments when passing parameters.
 
 ## Configuration Files
 

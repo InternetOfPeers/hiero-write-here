@@ -8,17 +8,35 @@ async function main() {
   try {
     loadEnvFile();
     client = initializeClient();
-    if (process.argv.length < 4) {
-      console.error("\n✗ Usage: node send-message.js <account-id> <message>");
-      console.error('✓ Example: node send-message.js 0.0.1234 "Hello!"\n');
+
+    // Parse arguments
+    const args = process.argv.slice(2);
+
+    // Check for --cbor flag
+    const cborIndex = args.indexOf("--cbor");
+    const useCBOR = cborIndex !== -1;
+
+    // Remove --cbor flag from args if present
+    if (useCBOR) {
+      args.splice(cborIndex, 1);
+    }
+
+    if (args.length < 2) {
+      console.error(
+        "\n✗ Usage: node send-message.js <account-id> <message> [--cbor]",
+      );
+      console.error("✓ Examples:");
+      console.error('  node send-message.js 0.0.1234 "Hello!"');
+      console.error('  node send-message.js 0.0.1234 "Hello!" --cbor\n');
       process.exit(1);
     }
-    const recipientAccountId = process.argv[2];
-    const message = process.argv.slice(3).join(" ");
+
+    const recipientAccountId = args[0];
+    const message = args.slice(1).join(" ");
     console.log(
-      `⚙ Sending message:\n  - Recipient: ${recipientAccountId} \n  - Message before encryption: "${message}"`,
+      `⚙ Sending message:\n  - Recipient: ${recipientAccountId}\n  - Message before encryption: "${message}"\n  - Format: ${useCBOR ? "CBOR" : "JSON"}`,
     );
-    await sendMessage(client, recipientAccountId, message);
+    await sendMessage(client, recipientAccountId, message, { useCBOR });
     client.close();
     process.exit(0);
   } catch (error) {

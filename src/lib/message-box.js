@@ -11,7 +11,12 @@ const {
   getFirstTopicMessage,
   getMessagesInRange,
 } = require("./hedera");
-const { encryptMessage, decryptMessage } = require("./common");
+const {
+  encryptMessage,
+  decryptMessage,
+  encodeCBOR,
+  decodeCBOR,
+} = require("./common");
 
 // == Public functions ========================================================
 
@@ -126,7 +131,17 @@ async function removeMessageBox(client, accountId) {
  * @param {string} recipientAccountId
  * @param {string} message
  */
-async function sendMessage(client, recipientAccountId, message) {
+/**
+ * Send an encrypted message to the recipient's message box.
+ * @param {import("@hashgraph/sdk").Client} Hedera client
+ * @param {string} recipientAccountId
+ * @param {string} message
+ * @param {Object} options - Optional parameters
+ * @param {boolean} [options.useCBOR=false] - Whether to use CBOR encoding
+ */
+async function sendMessage(client, recipientAccountId, message, options = {}) {
+  const { useCBOR = false } = options;
+
   console.log(`⚙ Sending message to account ${recipientAccountId}...`);
 
   const accountMemo = await getAccountMemo(client, recipientAccountId);
@@ -143,15 +158,32 @@ async function sendMessage(client, recipientAccountId, message) {
     console.log("✓ Encrypted");
 
     console.log(`⚙ Sending to message box ${messageBoxId}...`);
-    let result = await submitMessageToHCS(
-      client,
-      messageBoxId,
-      JSON.stringify({ type: "ENCRYPTED_MESSAGE", data: encryptedPayload }),
-    );
+
+    let messageData;
+    if (useCBOR) {
+      // Encode message using CBOR (send raw buffer, SDK will handle encoding)
+      messageData = encodeCBOR({
+        type: "ENCRYPTED_MESSAGE",
+        format: "cbor",
+        data: encryptedPayload,
+      });
+      console.debug("✓ Message encoded with CBOR");
+    } else {
+      // Use JSON (default)
+      messageData = JSON.stringify({
+        type: "ENCRYPTED_MESSAGE",
+        format: "json",
+        data: encryptedPayload,
+      });
+    }
+
+    let result = await submitMessageToHCS(client, messageBoxId, messageData);
     if (!result.success) {
       throw new Error(`Failed to send message: ${result.error}`);
     }
-    console.log(`✓ Encrypted message sent correctly.`);
+    console.log(
+      `✓ Encrypted message sent correctly (format: ${useCBOR ? "CBOR" : "JSON"}).`,
+    );
   } else {
     throw new Error(
       `Message box ID not found for account ${recipientAccountId}`,
@@ -242,32 +274,31 @@ async function checkMessages(
   const messages = [];
 
   rawMessages.forEach((msg) => {
-    const content = Buffer.from(msg.message, "base64").toString("utf8");
+    const messageBuffer = Buffer.from(msg.message, "base64");
     const timestamp = new Date(
       parseFloat(msg.consensus_timestamp) * 1000,
     ).toISOString();
 
-    try {
-      const parsed = JSON.parse(content);
-      if (parsed.type === "ENCRYPTED_MESSAGE") {
-        try {
-          const decrypted = decryptMessage(parsed.data, privateKey);
-          messages.push(
-            `[Seq: ${msg.sequence_number}] [${timestamp}] Encrypted message: ${decrypted}`,
-          );
-        } catch (error) {
-          messages.push(
-            `[Seq: ${msg.sequence_number}] [${timestamp}] Encrypted message (cannot decrypt): ${error.message}`,
-          );
-        }
-      } else if (parsed.type === "PUBLIC_KEY") {
+    const { parsed, format, raw } = parseMessageContent(messageBuffer);
+
+    if (parsed && parsed.type === "ENCRYPTED_MESSAGE") {
+      try {
+        const decrypted = decryptMessage(parsed.data, privateKey);
         messages.push(
-          `[Seq: ${msg.sequence_number}] [${timestamp}] Public key published`,
+          `[Seq: ${msg.sequence_number}] [${timestamp}] [${format.toUpperCase()}] Encrypted message: ${decrypted}`,
+        );
+      } catch (error) {
+        messages.push(
+          `[Seq: ${msg.sequence_number}] [${timestamp}] [${format.toUpperCase()}] Encrypted message (cannot decrypt): ${error.message}`,
         );
       }
-    } catch {
+    } else if (parsed && parsed.type === "PUBLIC_KEY") {
       messages.push(
-        `[Seq: ${msg.sequence_number}] [${timestamp}] Plain text message: ${content}`,
+        `[Seq: ${msg.sequence_number}] [${timestamp}] [${format.toUpperCase()}] Public key published`,
+      );
+    } else {
+      messages.push(
+        `[Seq: ${msg.sequence_number}] [${timestamp}] [${format.toUpperCase()}] Plain text message: ${raw}`,
       );
     }
   });
@@ -278,6 +309,50 @@ async function checkMessages(
 // == Private state & functions ================================================
 
 let pollingCache = { firstCall: true, lastSequenceNumber: 0 };
+
+/**
+ * Parse message content supporting both JSON and CBOR formats
+ * @param {Buffer} messageBuffer - Base64 decoded message buffer
+ * @returns {Object|null} Parsed message object or null if parsing fails
+ */
+function parseMessageContent(messageBuffer) {
+  // Check first byte for CBOR major type (0-7)
+  // CBOR major types are encoded in the top 3 bits
+  const firstByte = messageBuffer[0];
+  const majorType = firstByte >> 5;
+
+  // If the first byte indicates a valid CBOR major type (0-7) and is not '{' or '[' (JSON starters)
+  // try CBOR first
+  if (
+    majorType >= 0 &&
+    majorType <= 7 &&
+    firstByte !== 0x7b &&
+    firstByte !== 0x5b
+  ) {
+    try {
+      const parsed = decodeCBOR(messageBuffer);
+      // Verify it's a valid message object with expected structure
+      if (parsed && typeof parsed === "object" && parsed.type) {
+        return { parsed, format: "cbor", raw: messageBuffer };
+      }
+    } catch {
+      // Fall through to try JSON
+    }
+  }
+
+  try {
+    // Try to parse as JSON
+    const content = messageBuffer.toString("utf8");
+    return { parsed: JSON.parse(content), format: "json", raw: content };
+  } catch {
+    // If both fail, return as plain text
+    return {
+      parsed: null,
+      format: "plain",
+      raw: messageBuffer.toString("utf8"),
+    };
+  }
+}
 
 /**
  * Listen for messages
@@ -302,25 +377,28 @@ async function listenForMessages(isFirstPoll, topicId, privateKey, cache) {
     const messages = [];
 
     newMessages.forEach((msg) => {
-      const content = Buffer.from(msg.message, "base64").toString("utf8");
+      const messageBuffer = Buffer.from(msg.message, "base64");
       const timestamp = new Date(
         parseFloat(msg.consensus_timestamp) * 1000,
       ).toISOString();
 
-      try {
-        const parsed = JSON.parse(content);
-        if (parsed.type === "ENCRYPTED_MESSAGE") {
-          try {
-            const decrypted = decryptMessage(parsed.data, privateKey);
-            messages.push(`[${timestamp}] Encrypted message: ${decrypted}`);
-          } catch (error) {
-            messages.push(
-              `[${timestamp}] Encrypted message (cannot decrypt): ${error.message}`,
-            );
-          }
+      const { parsed, format, raw } = parseMessageContent(messageBuffer);
+
+      if (parsed && parsed.type === "ENCRYPTED_MESSAGE") {
+        try {
+          const decrypted = decryptMessage(parsed.data, privateKey);
+          messages.push(
+            `[${timestamp}] [${format.toUpperCase()}] Encrypted message: ${decrypted}`,
+          );
+        } catch (error) {
+          messages.push(
+            `[${timestamp}] [${format.toUpperCase()}] Encrypted message (cannot decrypt): ${error.message}`,
+          );
         }
-      } catch {
-        messages.push(`[${timestamp}] Plain text message: ${content}`);
+      } else {
+        messages.push(
+          `[${timestamp}] [${format.toUpperCase()}] Plain text message: ${raw}`,
+        );
       }
       cache.lastSequenceNumber = msg.sequence_number;
     });

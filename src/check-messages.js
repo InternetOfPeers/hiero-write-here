@@ -19,17 +19,17 @@ async function main() {
     if (isNaN(startSequence) || startSequence < 1) {
       console.error("\n✗ Error: Start sequence must be a positive number");
       console.error(
-        "✓ Usage: node check-messages.js [start-sequence] [end-sequence]"
+        "✓ Usage: node check-messages.js [start-sequence] [end-sequence]",
       );
       console.error("✓ Examples:");
       console.error(
-        "  node check-messages.js              # Get all messages from sequence 2 onwards"
+        "  node check-messages.js              # Get all messages from sequence 2 onwards",
       );
       console.error(
-        "  node check-messages.js 5            # Get all messages from sequence 5"
+        "  node check-messages.js 5            # Get all messages from sequence 5",
       );
       console.error(
-        "  node check-messages.js 5 10         # Get messages from sequence 5 to 10\n"
+        "  node check-messages.js 5 10         # Get messages from sequence 5 to 10\n",
       );
       process.exit(1);
     }
@@ -39,7 +39,7 @@ async function main() {
       (isNaN(endSequence) || endSequence < startSequence)
     ) {
       console.error(
-        "\n✗ Error: End sequence must be a number >= start sequence"
+        "\n✗ Error: End sequence must be a number >= start sequence",
       );
       process.exit(1);
     }
@@ -52,7 +52,7 @@ async function main() {
       process.env.DATA_DIR,
       accountId,
       startSequence,
-      endSequence
+      endSequence,
     );
 
     if (messages.length === 0) {
