@@ -2,6 +2,8 @@
 
 Hiero Message Box is a simple way for users to set up a message box to receive private messages, for example getting alerts about security communications about their assets or wallet, etc.
 
+[View the interactive presentation](./docs/presentation.html) to visualize the message box flow.
+
 The repo contains the code both for the sender and the receiver.
 
 The goal is to enable users to send encrypted messages to an account's message box just like this:
