@@ -42,7 +42,7 @@ To avoid spam, users can decide to set a paid topic as their message box.
 - **Message Formats**: Supports both JSON and CBOR encoding formats for flexibility
 - **Chunked Messages**: Automatically handles messages larger than 1KB split across multiple chunks by HCS
 - **Modular Architecture**: Common functions extracted for reusability and maintainability
-- **Zero External Dependencies**: Uses only Hashgraph SDK v2.76.0 and native Node.js functions
+- **Minimal External Dependencies**: Uses only Hashgraph SDK v2.76.0 and native Node.js functions
 
 ## Prerequisites
 
