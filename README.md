@@ -253,6 +253,11 @@ This will clear your account memo but will **not** delete the topic or your RSA 
 
 ## Project Flow
 
+For an at-a-glance animated overview, open:
+
+- docs/animated-flow.html (animated sequence of the end-to-end flow)
+- docs/flow-diagram.html (detailed static diagram with callouts)
+
 ### Setup (One-time or when creating new message box)
 
 ```text

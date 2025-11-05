@@ -1,0 +1,626 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hiero Message Box - Animated Flow</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        background: linear-gradient(
+          135deg,
+          #0f2027 0%,
+          #203a43 50%,
+          #2c5364 100%
+        );
+        color: #fff;
+        overflow: hidden;
+        height: 100vh;
+        width: 100vw;
+      }
+
+      .container {
+        width: 100%;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        position: relative;
+      }
+
+      .header {
+        text-align: center;
+        padding: 15px 0;
+        font-size: 1.8em;
+        font-weight: bold;
+        color: #00d4ff;
+        text-shadow: 0 0 20px rgba(0, 212, 255, 0.6);
+        z-index: 100;
+      }
+
+      .flow-stage {
+        flex: 1;
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 20px;
+        padding: 20px 30px;
+        position: relative;
+      }
+
+      /* Actor/Column */
+      .column {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        position: relative;
+      }
+
+      .avatar {
+        width: 80px;
+        height: 80px;
+        border-radius: 50%;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        border: 3px solid #00d4ff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 2.5em;
+        box-shadow: 0 0 30px rgba(0, 212, 255, 0.5);
+        animation: glow 2s ease-in-out infinite;
+        margin-bottom: 10px;
+      }
+
+      @keyframes glow {
+        0%,
+        100% {
+          box-shadow: 0 0 20px rgba(0, 212, 255, 0.5);
+        }
+        50% {
+          box-shadow: 0 0 40px rgba(0, 212, 255, 1);
+        }
+      }
+
+      .label {
+        font-size: 1.1em;
+        font-weight: bold;
+        color: #00d4ff;
+        margin-bottom: 25px;
+      }
+
+      .flow-steps {
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+        width: 100%;
+      }
+
+      .step-box {
+        background: rgba(255, 255, 255, 0.05);
+        border: 2px solid rgba(0, 212, 255, 0.3);
+        border-radius: 12px;
+        padding: 12px;
+        text-align: center;
+        font-size: 0.8em;
+        backdrop-filter: blur(10px);
+        position: relative;
+        opacity: 0;
+        transform: scale(0.8) translateY(20px);
+        transition: all 0.5s ease-out;
+      }
+
+      .step-box.show {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+      }
+
+      @keyframes popIn {
+        to {
+          opacity: 1;
+          transform: scale(1);
+        }
+      }
+
+      .step-box.active {
+        border-color: #00d4ff;
+        background: rgba(0, 212, 255, 0.15);
+        box-shadow: 0 0 25px rgba(0, 212, 255, 0.4);
+      }
+
+      .step-icon {
+        font-size: 2.2em;
+        display: block;
+        margin-bottom: 5px;
+      }
+
+      .step-num {
+        position: absolute;
+        top: -12px;
+        left: -12px;
+        width: 26px;
+        height: 26px;
+        background: #00d4ff;
+        color: #0f2027;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: bold;
+        font-size: 0.9em;
+        box-shadow: 0 0 15px rgba(0, 212, 255, 0.8);
+      }
+
+      /* Center encryption visualization */
+      .center-column {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: space-around;
+        padding: 20px 0;
+      }
+
+      .network-node {
+        background: rgba(255, 255, 255, 0.08);
+        border: 2px solid rgba(0, 212, 255, 0.4);
+        border-radius: 15px;
+        padding: 15px 25px;
+        text-align: center;
+        backdrop-filter: blur(10px);
+        opacity: 0;
+        transform: scale(0.8);
+        transition: all 0.6s ease-out;
+      }
+
+      .network-node.show {
+        opacity: 1;
+        transform: scale(1);
+      }
+
+      .network-node .icon {
+        font-size: 2.8em;
+        margin-bottom: 5px;
+      }
+
+      .network-node .text {
+        font-size: 0.75em;
+        color: #00d4ff;
+      }
+
+      .encryption-chain {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        align-items: center;
+      }
+
+      .encrypt-step {
+        background: rgba(255, 255, 255, 0.08);
+        border: 2px solid rgba(0, 212, 255, 0.3);
+        border-radius: 10px;
+        padding: 10px 20px;
+        text-align: center;
+        backdrop-filter: blur(10px);
+        opacity: 0;
+        transform: translateX(-30px);
+        transition: all 0.5s ease-out;
+      }
+
+      .encrypt-step.show {
+        opacity: 1;
+        transform: translateX(0);
+      }
+
+      @keyframes slideIn {
+        from {
+          opacity: 0;
+          transform: translateX(-30px);
+        }
+        to {
+          opacity: 1;
+          transform: translateX(0);
+        }
+      }
+
+      .encrypt-step.highlight {
+        border-color: #00d4ff;
+        background: rgba(0, 212, 255, 0.15);
+      }
+
+      .encrypt-step.highlight.show {
+        animation: pulse 2s ease-in-out infinite;
+      }
+
+      @keyframes pulse {
+        0%,
+        100% {
+          transform: scale(1);
+        }
+        50% {
+          transform: scale(1.05);
+        }
+      }
+
+      .encrypt-step .icon {
+        font-size: 1.8em;
+      }
+
+      .encrypt-step .text {
+        font-size: 0.7em;
+        margin-top: 3px;
+      }
+
+      .arrow-down {
+        font-size: 1.5em;
+        color: #00d4ff;
+        opacity: 0;
+        transition: opacity 0.4s ease-out;
+      }
+
+      .arrow-down.show {
+        opacity: 1;
+        animation: bounce 1.5s ease-in-out infinite;
+      }
+
+      @keyframes bounce {
+        0%,
+        100% {
+          transform: translateY(0);
+        }
+        50% {
+          transform: translateY(5px);
+        }
+      }
+
+      @keyframes fadeIn {
+        to {
+          opacity: 1;
+        }
+      }
+
+      /* Animated packet flying across screen */
+      .message-packet {
+        position: absolute;
+        width: 50px;
+        height: 50px;
+        background: linear-gradient(135deg, #00d4ff, #00ff88);
+        border-radius: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.8em;
+        box-shadow: 0 0 30px rgba(0, 212, 255, 0.8);
+        z-index: 1000;
+        opacity: 0;
+      }
+
+      .avatar,
+      .label {
+        opacity: 0;
+        transition: opacity 0.6s ease-out;
+      }
+
+      .avatar.show,
+      .label.show {
+        opacity: 1;
+      }
+
+      /* Connection lines */
+      .connection-line {
+        position: absolute;
+        height: 2px;
+        background: linear-gradient(90deg, transparent, #00d4ff, transparent);
+        opacity: 0;
+        animation: drawLine 1s ease-out forwards;
+      }
+
+      @keyframes drawLine {
+        to {
+          opacity: 0.5;
+        }
+      }
+
+      .success-indicator {
+        background: rgba(0, 255, 136, 0.15);
+        border: 2px solid #00ff88;
+        box-shadow: 0 0 20px rgba(0, 255, 136, 0.4);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">🔐 Hiero Message Box Flow</div>
+
+      <div class="flow-stage">
+        <!-- LEFT: Sender -->
+        <div class="column">
+          <div class="avatar" id="sender-avatar">👤</div>
+          <div class="label" id="sender-label">Sender</div>
+          <div class="flow-steps">
+            <div class="step-box" id="sender-step-1">
+              <div class="step-num">1</div>
+              <span class="step-icon">🔍</span>
+              Lookup Recipient
+            </div>
+            <div class="step-box" id="sender-step-2">
+              <div class="step-num">2</div>
+              <span class="step-icon">🔓</span>
+              Get Public Key
+            </div>
+            <div class="step-box" id="sender-step-3">
+              <div class="step-num">3</div>
+              <span class="step-icon">🔐</span>
+              Encrypt Message
+            </div>
+            <div class="step-box" id="sender-step-4">
+              <div class="step-num">4</div>
+              <span class="step-icon">📤</span>
+              Submit to Topic
+            </div>
+          </div>
+        </div>
+
+        <!-- CENTER: Network/Encryption -->
+        <div class="column center-column">
+          <div class="network-node" id="hcs-topic">
+            <div class="icon">📋</div>
+            <div class="text">HCS Topic</div>
+          </div>
+
+          <div class="encryption-chain">
+            <div class="encrypt-step" id="plain-text">
+              <div class="icon">📝</div>
+              <div class="text">Plain Text</div>
+            </div>
+            <div class="arrow-down" id="arrow-1">↓</div>
+            <div class="encrypt-step highlight" id="aes-encrypt">
+              <div class="icon">🔑</div>
+              <div class="text">AES-256</div>
+            </div>
+            <div class="arrow-down" id="arrow-2">↓</div>
+            <div class="encrypt-step highlight" id="rsa-encrypt">
+              <div class="icon">🔐</div>
+              <div class="text">RSA-2048</div>
+            </div>
+            <div class="arrow-down" id="arrow-3">↓</div>
+            <div class="encrypt-step" id="encrypted-pkg">
+              <div class="icon">📦</div>
+              <div class="text">Encrypted</div>
+            </div>
+          </div>
+
+          <div class="network-node" id="mirror-node">
+            <div class="icon">🌐</div>
+            <div class="text">Mirror Node</div>
+          </div>
+        </div>
+
+        <!-- RIGHT: Receiver -->
+        <div class="column">
+          <div class="avatar" id="receiver-avatar">👤</div>
+          <div class="label" id="receiver-label">Receiver</div>
+          <div class="flow-steps">
+            <div class="step-box" id="receiver-step-1">
+              <div class="step-num">1</div>
+              <span class="step-icon">📦</span>
+              Setup Box
+            </div>
+            <div class="step-box" id="receiver-step-2">
+              <div class="step-num">2</div>
+              <span class="step-icon">🔄</span>
+              Poll Messages
+            </div>
+            <div class="step-box" id="receiver-step-3">
+              <div class="step-num">3</div>
+              <span class="step-icon">🔓</span>
+              Decrypt
+            </div>
+            <div class="step-box success-indicator" id="receiver-step-4">
+              <span class="step-icon">✅</span>
+              Read Message
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      // Sequential animation timeline
+      const timeline = [
+        // Phase 1: Show receiver setup (0-3s)
+        { time: 0, action: () => show('receiver-avatar') },
+        { time: 200, action: () => show('receiver-label') },
+        { time: 500, action: () => show('receiver-step-1') },
+        { time: 800, action: () => show('hcs-topic') },
+
+        // Phase 2: Show sender (3-6s)
+        { time: 3000, action: () => show('sender-avatar') },
+        { time: 3200, action: () => show('sender-label') },
+        { time: 3500, action: () => show('sender-step-1') },
+        {
+          time: 4000,
+          action: () => {
+            hide('sender-step-1');
+            show('sender-step-2');
+          },
+        },
+
+        // Phase 3: Encryption process (6-10s)
+        {
+          time: 6000,
+          action: () => {
+            hide('sender-step-2');
+            show('sender-step-3');
+            show('plain-text');
+          },
+        },
+        {
+          time: 6500,
+          action: () => {
+            show('arrow-1');
+          },
+        },
+        {
+          time: 7000,
+          action: () => {
+            show('aes-encrypt');
+          },
+        },
+        {
+          time: 7500,
+          action: () => {
+            show('arrow-2');
+          },
+        },
+        {
+          time: 8000,
+          action: () => {
+            show('rsa-encrypt');
+          },
+        },
+        {
+          time: 8500,
+          action: () => {
+            show('arrow-3');
+          },
+        },
+        {
+          time: 9000,
+          action: () => {
+            show('encrypted-pkg');
+          },
+        },
+
+        // Phase 4: Submit and transfer (10-14s)
+        {
+          time: 10000,
+          action: () => {
+            hide('sender-step-3');
+            show('sender-step-4');
+          },
+        },
+        { time: 10500, action: () => createMessagePacket() },
+
+        // Phase 5: Receive and decrypt (14-18s)
+        {
+          time: 14000,
+          action: () => {
+            show('receiver-step-2');
+          },
+        },
+        {
+          time: 14500,
+          action: () => {
+            show('mirror-node');
+          },
+        },
+        {
+          time: 15500,
+          action: () => {
+            hide('receiver-step-2');
+            show('receiver-step-3');
+          },
+        },
+        {
+          time: 17000,
+          action: () => {
+            hide('receiver-step-3');
+            show('receiver-step-4');
+            makeActive('receiver-step-4');
+          },
+        },
+
+        // Reset and loop (20s)
+        { time: 20000, action: () => resetAndRestart() },
+      ];
+
+      function show(id) {
+        const el = document.getElementById(id);
+        if (el) el.classList.add('show');
+      }
+
+      function hide(id) {
+        const el = document.getElementById(id);
+        if (el) el.classList.remove('show');
+      }
+
+      function makeActive(id) {
+        const el = document.getElementById(id);
+        if (el) el.classList.add('active');
+      }
+
+      function resetAndRestart() {
+        // Hide all elements
+        document.querySelectorAll('.show, .active').forEach(el => {
+          el.classList.remove('show', 'active');
+        });
+
+        // Restart timeline
+        setTimeout(() => runTimeline(), 1000);
+      }
+
+      function runTimeline() {
+        timeline.forEach(item => {
+          setTimeout(item.action, item.time);
+        });
+      }
+
+      // Animate message packet
+      function createMessagePacket() {
+        const packet = document.createElement('div');
+        packet.className = 'message-packet';
+        packet.innerHTML = '📧';
+        document.body.appendChild(packet);
+
+        const startX = window.innerWidth * 0.18;
+        const endX = window.innerWidth * 0.82;
+        const y = window.innerHeight * 0.5;
+
+        packet.style.left = startX + 'px';
+        packet.style.top = y + 'px';
+        packet.style.opacity = '0';
+
+        setTimeout(() => {
+          packet.style.transition = 'opacity 0.3s';
+          packet.style.opacity = '1';
+        }, 50);
+
+        let progress = 0;
+        const duration = 2500;
+        const startTime = Date.now();
+
+        function animate() {
+          const elapsed = Date.now() - startTime;
+          progress = Math.min(elapsed / duration, 1);
+
+          const easeProgress =
+            progress < 0.5
+              ? 2 * progress * progress
+              : 1 - Math.pow(-2 * progress + 2, 2) / 2;
+
+          const currentX = startX + (endX - startX) * easeProgress;
+          packet.style.left = currentX + 'px';
+
+          const wave = Math.sin(progress * Math.PI * 2) * 30;
+          packet.style.top = y + wave + 'px';
+
+          if (progress < 1) {
+            requestAnimationFrame(animate);
+          } else {
+            packet.style.transition = 'opacity 0.3s';
+            packet.style.opacity = '0';
+            setTimeout(() => packet.remove(), 300);
+          }
+        }
+
+        animate();
+      }
+
+      // Start the animation
+      runTimeline();
+    </script>
+  </body>
+</html>
