@@ -1,5 +1,4 @@
 const {
-  AccountInfoQuery,
   TopicCreateTransaction,
   Client,
   AccountId,
@@ -63,15 +62,79 @@ function getMirrorNodeUrl() {
 }
 
 /**
- * Retrieves the account memo for the account.
- * @param {import("@hashgraph/sdk").Client} client - The Hedera client.
+ * Helper function to make HTTPS requests to the Mirror Node
+ * @param {string} endpoint - The API endpoint path (e.g., '/api/v1/accounts/0.0.123')
+ * @param {Object} options - Request options
+ * @param {boolean} [options.resolveOnError=false] - If true, resolves with null on error instead of rejecting
+ * @returns {Promise<Object>} The parsed JSON response or response object with statusCode
+ */
+async function mirrorNodeRequest(endpoint, options = {}) {
+  const { resolveOnError = false } = options;
+  const mirrorNodeUrl = getMirrorNodeUrl();
+  const url = `${mirrorNodeUrl}${endpoint}`;
+
+  return new Promise((resolve, reject) => {
+    https
+      .get(url, res => {
+        let data = '';
+        res.on('data', chunk => (data += chunk));
+        res.on('end', () => {
+          try {
+            const response = JSON.parse(data);
+            if (resolveOnError) {
+              resolve({ statusCode: res.statusCode, data: response });
+            } else {
+              resolve(response);
+            }
+          } catch (error) {
+            if (resolveOnError) {
+              resolve({ statusCode: res.statusCode, data: null, error });
+            } else {
+              reject(
+                new Error(
+                  `Failed to parse Mirror Node response: ${error.message}`
+                )
+              );
+            }
+          }
+        });
+      })
+      .on('error', error => {
+        if (resolveOnError) {
+          resolve({ statusCode: null, data: null, error });
+        } else {
+          reject(new Error(`Mirror Node request failed: ${error.message}`));
+        }
+      });
+  });
+}
+
+/**
+ * Retrieves the account memo for the account using Mirror Node.
+ * @param {string} accountId - The account ID to query.
  * @returns {Promise<string>} The account memo.
  */
-async function getAccountMemo(client, accountId) {
-  const accountInfo = await new AccountInfoQuery()
-    .setAccountId(accountId)
-    .execute(client);
-  return accountInfo.accountMemo;
+async function getAccountMemo(accountId) {
+  const response = await mirrorNodeRequest(`/api/v1/accounts/${accountId}`);
+  return response.memo || '';
+}
+
+/**
+ * Validates if an account ID exists on the Hedera network using Mirror Node.
+ * @param {string} accountId - The account ID to validate.
+ * @returns {Promise<boolean>} True if the account exists, false otherwise.
+ */
+async function isValidAccount(accountId) {
+  const result = await mirrorNodeRequest(`/api/v1/accounts/${accountId}`, {
+    resolveOnError: true,
+  });
+
+  if (result.statusCode === 200 && result.data) {
+    // Check if account exists and is not deleted
+    return result.data.account && !result.data.deleted;
+  }
+
+  return false;
 }
 
 /**
@@ -152,7 +215,6 @@ async function submitMessageToHCS(client, topicId, message) {
  * @returns {Promise<Object>} The Mirror Node response
  */
 async function queryTopicMessages(topicId, options = {}) {
-  const mirrorNodeUrl = getMirrorNodeUrl();
   const params = new URLSearchParams();
 
   if (options.limit) params.append('limit', options.limit);
@@ -164,30 +226,10 @@ async function queryTopicMessages(topicId, options = {}) {
     );
   }
 
-  const url = `${mirrorNodeUrl}/api/v1/topics/${topicId}/messages?${params.toString()}`;
+  const queryString = params.toString();
+  const endpoint = `/api/v1/topics/${topicId}/messages${queryString ? `?${queryString}` : ''}`;
 
-  return new Promise((resolve, reject) => {
-    https
-      .get(url, res => {
-        let data = '';
-        res.on('data', chunk => (data += chunk));
-        res.on('end', () => {
-          try {
-            const response = JSON.parse(data);
-            resolve(response);
-          } catch (error) {
-            reject(
-              new Error(
-                `Failed to parse Mirror Node response: ${error.message}`
-              )
-            );
-          }
-        });
-      })
-      .on('error', error => {
-        reject(new Error(`Mirror Node request failed: ${error.message}`));
-      });
-  });
+  return mirrorNodeRequest(endpoint);
 }
 
 /**
@@ -432,6 +474,7 @@ async function getMessagesInRange(topicId, startSequence, endSequence) {
 
 module.exports = {
   getAccountMemo,
+  isValidAccount,
   createTopic,
   initializeClient,
   updateAccountMemo,

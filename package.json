@@ -7,7 +7,7 @@
   "author": "Giuseppe Bertone <giuseppe.bertone@proton.me>",
   "type": "commonjs",
   "scripts": {
-    "start": "npm run setup-message-box && npm run listen-for-new-messages",
+    "start": "npm run setup-message-box && sleep 5 && npm run listen-for-new-messages",
     "setup-message-box": "node src/setup-message-box.js",
     "listen-for-new-messages": "node src/listen-for-new-messages.js",
     "check-messages": "node src/check-messages.js",

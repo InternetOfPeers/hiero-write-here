@@ -3,6 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const {
   getAccountMemo,
+  isValidAccount,
   updateAccountMemo,
   createTopic,
   submitMessageToHCS,
@@ -28,7 +29,7 @@ const {
  */
 async function setupMessageBox(client, dataDir, accountId) {
   const { publicKey, privateKey } = loadOrGenerateRSAKeyPair(dataDir);
-  const accountMemo = await getAccountMemo(client, accountId);
+  const accountMemo = await getAccountMemo(accountId);
   console.debug(`✓ Current account memo: "${accountMemo}"`);
 
   let needsNewMessageBox = true;
@@ -105,7 +106,7 @@ async function setupMessageBox(client, dataDir, accountId) {
  * @param {string} accountId
  */
 async function removeMessageBox(client, accountId) {
-  const accountMemo = await getAccountMemo(client, accountId);
+  const accountMemo = await getAccountMemo(accountId);
   if (accountMemo === '') {
     console.log(`✓ No message box configured for account ${accountId}`);
     return { success: true };
@@ -127,20 +128,20 @@ async function removeMessageBox(client, accountId) {
  * @param {import("@hashgraph/sdk").Client} Hedera client
  * @param {string} recipientAccountId
  * @param {string} message
- */
-/**
- * Send an encrypted message to the recipient's message box.
- * @param {import("@hashgraph/sdk").Client} Hedera client
- * @param {string} recipientAccountId
- * @param {string} message
  * @param {Object} options - Optional parameters
  * @param {boolean} [options.useCBOR=false] - Whether to use CBOR encoding
  */
 async function sendMessage(client, recipientAccountId, message, options = {}) {
-  const { useCBOR = false } = options;
+  if (!(await isValidAccount(recipientAccountId))) {
+    throw new Error(
+      `${recipientAccountId} is not a valid Hedera account. Please note you need to specify an account with a message box configured. Don't send messages the message box directly.`
+    );
+  }
 
   console.log(`⚙ Sending message to account ${recipientAccountId}...`);
-  const accountMemo = await getAccountMemo(client, recipientAccountId);
+  const { useCBOR = false } = options;
+
+  const accountMemo = await getAccountMemo(recipientAccountId);
   console.debug(`✓ Account memo: "${accountMemo}"`);
 
   const messageBoxId = extractMessageBoxIdFromMemo(accountMemo);
@@ -181,17 +182,16 @@ async function sendMessage(client, recipientAccountId, message, options = {}) {
 
 /**
  * Poll for new messages in the message box.
- * @param {import("@hashgraph/sdk").Client} client
  * @param {string} dataDir
  * @param {string} accountId
  * @returns {Promise<string[]>}
  */
-async function pollMessages(client, dataDir, accountId) {
+async function pollMessages(dataDir, accountId) {
   if (pollingCache.firstCall) {
     const { privateKey } = loadOrGenerateRSAKeyPair(dataDir);
     pollingCache.privateKey = privateKey;
 
-    const accountMemo = await getAccountMemo(client, accountId);
+    const accountMemo = await getAccountMemo(accountId);
     console.debug(`✓ Current account memo: "${accountMemo}"`);
 
     const messageBoxId = extractMessageBoxIdFromMemo(accountMemo);
@@ -219,23 +219,16 @@ async function pollMessages(client, dataDir, accountId) {
 
 /**
  * Check messages in a range for the account's message box.
- * @param {import("@hashgraph/sdk").Client} client
  * @param {string} dataDir
  * @param {string} accountId
  * @param {number} startSequence - Starting sequence number (inclusive)
  * @param {number} [endSequence] - Ending sequence number (inclusive), if not provided gets all messages from start
  * @returns {Promise<string[]>}
  */
-async function checkMessages(
-  client,
-  dataDir,
-  accountId,
-  startSequence,
-  endSequence
-) {
+async function checkMessages(dataDir, accountId, startSequence, endSequence) {
   const { privateKey } = loadOrGenerateRSAKeyPair(dataDir);
 
-  const accountMemo = await getAccountMemo(client, accountId);
+  const accountMemo = await getAccountMemo(accountId);
   console.debug(`✓ Current account memo: "${accountMemo}"`);
 
   const messageBoxId = extractMessageBoxIdFromMemo(accountMemo);
@@ -258,33 +251,7 @@ async function checkMessages(
   const messages = [];
 
   rawMessages.forEach(msg => {
-    const messageBuffer = Buffer.from(msg.message, 'base64');
-    const timestamp = new Date(
-      parseFloat(msg.consensus_timestamp) * 1000
-    ).toISOString();
-
-    const { parsed, format, raw } = parseMessageContent(messageBuffer);
-
-    if (parsed && parsed.type === 'ENCRYPTED_MESSAGE') {
-      try {
-        const decrypted = decryptMessage(parsed.data, privateKey);
-        messages.push(
-          `[Seq: ${msg.sequence_number}] [${timestamp}] [${format.toUpperCase()}] Encrypted message: ${decrypted}`
-        );
-      } catch (error) {
-        messages.push(
-          `[Seq: ${msg.sequence_number}] [${timestamp}] [${format.toUpperCase()}] Encrypted message (cannot decrypt): ${error.message}`
-        );
-      }
-    } else if (parsed && parsed.type === 'PUBLIC_KEY') {
-      messages.push(
-        `[Seq: ${msg.sequence_number}] [${timestamp}] [${format.toUpperCase()}] Public key published`
-      );
-    } else {
-      messages.push(
-        `[Seq: ${msg.sequence_number}] [${timestamp}] [${format.toUpperCase()}] Plain text message: ${raw}`
-      );
-    }
+    messages.push(formatMessage(msg, privateKey));
   });
 
   return messages;
@@ -339,6 +306,35 @@ function parseMessageContent(messageBuffer) {
 }
 
 /**
+ * Parse and format a raw message into a human-readable string
+ * @param {Object} msg - Raw message object from Hedera
+ * @param {string} privateKey - RSA private key for decryption
+ * @returns {string} Formatted message string
+ */
+function formatMessage(msg, privateKey) {
+  const messageBuffer = Buffer.from(msg.message, 'base64');
+  const timestamp = new Date(
+    parseFloat(msg.consensus_timestamp) * 1000
+  ).toISOString();
+  const sender = msg.payer_account_id;
+
+  const { parsed, format, raw } = parseMessageContent(messageBuffer);
+
+  if (parsed && parsed.type === 'ENCRYPTED_MESSAGE') {
+    try {
+      const decrypted = decryptMessage(parsed.data, privateKey);
+      return `[Seq: ${msg.sequence_number}] [${timestamp}] [${format.toUpperCase()}] Encrypted message from ${sender}:\n${decrypted}`;
+    } catch (error) {
+      return `[Seq: ${msg.sequence_number}] [${timestamp}] [${format.toUpperCase()}] Encrypted message from ${sender} (cannot decrypt):\n${error.message}`;
+    }
+  } else if (parsed && parsed.type === 'PUBLIC_KEY') {
+    return `[Seq: ${msg.sequence_number}] [${timestamp}] [${format.toUpperCase()}] Public key published by ${sender}:\n${parsed.publicKey}`;
+  } else {
+    return `[Seq: ${msg.sequence_number}] [${timestamp}] [${format.toUpperCase()}] Plain text message from ${sender}:\n${raw}`;
+  }
+}
+
+/**
  * Listen for messages
  * @param {boolean} isFirstPoll
  * @param {string} topicId
@@ -361,29 +357,7 @@ async function listenForMessages(isFirstPoll, topicId, privateKey, cache) {
     const messages = [];
 
     newMessages.forEach(msg => {
-      const messageBuffer = Buffer.from(msg.message, 'base64');
-      const timestamp = new Date(
-        parseFloat(msg.consensus_timestamp) * 1000
-      ).toISOString();
-
-      const { parsed, format, raw } = parseMessageContent(messageBuffer);
-
-      if (parsed && parsed.type === 'ENCRYPTED_MESSAGE') {
-        try {
-          const decrypted = decryptMessage(parsed.data, privateKey);
-          messages.push(
-            `[${timestamp}] [${format.toUpperCase()}] Encrypted message: ${decrypted}`
-          );
-        } catch (error) {
-          messages.push(
-            `[${timestamp}] [${format.toUpperCase()}] Encrypted message (cannot decrypt): ${error.message}`
-          );
-        }
-      } else {
-        messages.push(
-          `[${timestamp}] [${format.toUpperCase()}] Plain text message: ${raw}`
-        );
-      }
+      messages.push(formatMessage(msg, privateKey));
 
       const lastSeq = msg._maxSequence || msg.sequence_number;
       if (lastSeq > cache.lastSequenceNumber)
