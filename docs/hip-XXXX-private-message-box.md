@@ -17,6 +17,8 @@ updated: 2025-11-07
 
 This HIP proposes a standardized method for Hiero accounts to receive encrypted, asynchronous messages through dedicated "message boxes" implemented as Hiero Consensus Service (HCS) topics. The specification defines a protocol enabling any account to advertise a message box topic ID in their account memo, publish encryption keys to that topic, and receive end-to-end encrypted messages from other network participants. This creates a decentralized, censorship-resistant messaging layer for notifications, alerts, wallet communications, and general peer-to-peer messaging on any Hiero network.
 
+[A simplified interactive presentation of the message box flow](https://internetofpeers.org/hiero-message-box/presentation.html) is available.
+
 ## Motivation
 
 Hiero currently lacks a standardized mechanism for accounts to receive asynchronous, private messages. There are numerous use cases requiring secure message delivery:
@@ -556,11 +558,11 @@ Implementations MUST handle the following error cases:
 
 ### Security Considerations
 
-**Front running the first message:**
+**Front Running the First Message:**
 
 Although unlikely, considering that the topic is permissionless, a malicious user can technically send the first message before the correct owner of the message box has the possibility to do it, especially if the client is implemented incorrectly or there are unexpected issues between the creation of the topic and the sending of the first message. This can cause problems if the owner of the message box does not immediately notice the issue, so the risk is users starts sending private messages to malicious users.
 
-To solve this problem, the message box owner must sign the first message payload, and the sender must verify that the first message payload's signature correspond with the message box owner admnin key.
+To solve this problem, the message box owner MUST sign the first message payload, and the sender MUST verify that the first message payload's signature correspond with the message box owner admnin key.
 
 **Deterministic Signature Serialization:**
 
