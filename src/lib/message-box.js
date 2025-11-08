@@ -13,23 +13,42 @@ const {
   getMessagesInRange,
   parseHederaPrivateKey,
   derivePublicKeyFromHederaKey,
+  getAccountPublicKey,
 } = require('./hedera');
 const {
   encryptMessage,
   decryptMessage,
   encodeCBOR,
   decodeCBOR,
-} = require('./common');
+  signMessage,
+  verifySignature,
+} = require('./crypto');
 
 // == Public functions ========================================================
+
+// IMPORTANT: Two-Key System
+// -------------------------
+// 1. PAYER_PRIVATE_KEY (Operator/Payer): Pays for all Hedera transactions
+// 2. MESSAGE_BOX_OWNER_PRIVATE_KEY (Owner): Signs the first message to prove message box ownership
+//    - If not set, defaults to PAYER_PRIVATE_KEY (operator owns the message box)
+//    - Allows third-party services to pay for transactions on behalf of users
+//
+// Verification flow:
+// - Owner signs the public key message with MESSAGE_BOX_OWNER_PRIVATE_KEY
+// - Signature includes accountId and signer's public key
+// - Senders verify signature against account's public key from Mirror Node
+// - This proves the account owner authorized the message box, regardless of who paid
 
 /**
  * Sets up the message box for the account by creating a new topic and storing the public key.
  * The key pair is stored in the specified data directory. If the keys does not exist, they are generated.
  * @param {import("@hashgraph/sdk").Client} client
  * @param {string} accountId
+ * @param {object} options - Optional configuration
+ * @param {boolean} options.skipPrompts - If true, automatically create new message box when conflicts exist
  */
-async function setupMessageBox(client, dataDir, accountId) {
+async function setupMessageBox(client, dataDir, accountId, options = {}) {
+  const { skipPrompts = false } = options;
   let encryptionType = getEncryptionType();
   const { publicKey, privateKey } = await loadOrGenerateKeyPair(
     dataDir,
@@ -38,17 +57,35 @@ async function setupMessageBox(client, dataDir, accountId) {
   // Re-fetch encryption type in case it was changed during key loading (ED25519 -> RSA fallback)
   encryptionType = getEncryptionType();
 
+  const ownerPrivateKey = getOwnerPrivateKey();
   const accountMemo = await getAccountMemo(accountId);
   console.debug(`✓ Current account memo: "${accountMemo}"`);
 
   let needsNewMessageBox = true;
   const messageBoxId = extractMessageBoxIdFromMemo(accountMemo);
   if (messageBoxId) {
-    console.debug(
+    console.log(
       `✓ Found existing message box ${messageBoxId} for account ${accountId}`
     );
     const status = await checkMessageBoxStatus(messageBoxId);
-    if (status.exists && status.hasPublicKey) {
+
+    if (status.exists && !status.hasPublicKey) {
+      // Message box exists but doesn't have valid public key
+      console.warn(
+        `\n⚠ WARNING: Message box ${messageBoxId} exists but has invalid format!`
+      );
+      if (!skipPrompts) {
+        const confirmed = await promptYesNo(
+          '? Create new message box? (yes/no): '
+        );
+        if (!confirmed) {
+          console.log('\n✗ Setup cancelled. Exiting.');
+          process.exit(1);
+        }
+      } else {
+        console.log('⚙ Auto-creating new message box (skipPrompts=true)');
+      }
+    } else if (status.exists && status.hasPublicKey) {
       const keysMatch = await verifyKeyPairMatchesTopic(
         messageBoxId,
         privateKey,
@@ -58,21 +95,18 @@ async function setupMessageBox(client, dataDir, accountId) {
         console.warn(
           `\n⚠ WARNING: Your keys cannot decrypt messages for message box ${messageBoxId}!`
         );
-        const readline = require('readline').createInterface({
-          input: process.stdin,
-          output: process.stdout,
-        });
-        const answer = await new Promise(resolve => {
-          readline.question('? Create new message box? (yes/no): ', ans => {
-            readline.close();
-            resolve(ans.toLowerCase());
-          });
-        });
-        if (!(answer === 'yes' || answer === 'y')) {
-          console.log(
-            '\n✗ Messages in the message box cannot be decrypted. Exiting.'
+        if (!skipPrompts) {
+          const confirmed = await promptYesNo(
+            '? Create new message box? (yes/no): '
           );
-          process.exit(1);
+          if (!confirmed) {
+            console.log(
+              '\n✗ Messages in the message box cannot be decrypted. Exiting.'
+            );
+            process.exit(1);
+          }
+        } else {
+          console.log('⚙ Auto-creating new message box (skipPrompts=true)');
         }
       } else {
         console.log(
@@ -86,17 +120,26 @@ async function setupMessageBox(client, dataDir, accountId) {
   if (needsNewMessageBox) {
     const result = await createTopic(
       client,
-      `[HIP-XXXX:${client.operatorAccountId}] ${client.operatorAccountId} listens here for HIP-XXXX encrypted messages.`
+      `[HIP-XXXX:${accountId}] ${accountId} listens here for HIP-XXXX encrypted messages.`,
+      ownerPrivateKey
     );
     if (!result.success)
       throw new Error(`Failed to create new message box: ${result.error}`);
 
     const newMessageBoxId = result.topicId;
-    await publishPublicKey(client, newMessageBoxId, publicKey, encryptionType);
+    await publishPublicKey(
+      client,
+      newMessageBoxId,
+      publicKey,
+      encryptionType,
+      accountId,
+      ownerPrivateKey
+    );
     await updateAccountMemo(
       client,
       accountId,
-      `[HIP-XXXX:${newMessageBoxId}] If you want to contact me, send HIP-XXXX encrypted messages to ${newMessageBoxId}.`
+      `[HIP-XXXX:${newMessageBoxId}] If you want to contact me, send HIP-XXXX encrypted messages to ${newMessageBoxId}.`,
+      ownerPrivateKey
     );
     console.log(
       `✓ Message box ${newMessageBoxId} set up correctly for account ${accountId} (encryption: ${encryptionType})`
@@ -122,7 +165,13 @@ async function removeMessageBox(client, accountId) {
     return { success: true };
   }
 
-  const result = await updateAccountMemo(client, accountId, '');
+  const ownerPrivateKey = getOwnerPrivateKey();
+  const result = await updateAccountMemo(
+    client,
+    accountId,
+    '',
+    ownerPrivateKey
+  );
   console.log(
     result.success
       ? `✓ Message box removed for account ${accountId}`
@@ -166,22 +215,89 @@ async function sendMessage(client, recipientAccountId, message, options = {}) {
   if (!response.message) throw new Error('No messages found in topic');
   console.log('✓ First message retrieved');
 
-  console.log('⚙ Verifying message box ownership...');
-  const payerAccountId = response.payer_account_id;
-  if (!payerAccountId) {
-    throw new Error('Payer account ID not found in first message');
-  }
-  if (payerAccountId !== recipientAccountId) {
+  // Parse the first message
+  const messageContent = Buffer.from(response.message, 'base64').toString(
+    'utf8'
+  );
+  const firstMessage = JSON.parse(messageContent);
+
+  console.log('⚙ Verifying message box ownership via signature...');
+
+  // Check if the message has the new structure with payload and proof
+  if (!firstMessage.payload || !firstMessage.proof) {
     throw new Error(
-      `⚠ SECURITY WARNING: Message box ${messageBoxId} was NOT created by account ${recipientAccountId}!\n` +
-        `  The first message was sent by: ${payerAccountId}\n` +
-        `  This could be a compromised or fraudulent message box.\n` +
+      '⚠ SECURITY WARNING: First message does not have the required structure!\n' +
+        '  Expected: { payload: {...}, proof: {...} }\n' +
+        '  This message box may be using an old format or could be fraudulent.\n' +
+        '  Refusing to send message for security reasons.'
+    );
+  }
+
+  const { payload, proof } = firstMessage;
+
+  // Check if proof has all required fields
+  if (
+    !proof.signature ||
+    !proof.signerPublicKey ||
+    !proof.signerKeyType ||
+    !proof.accountId
+  ) {
+    throw new Error(
+      '⚠ SECURITY WARNING: First message proof does not contain required fields!\n' +
+        '  This message box may be using an old format or could be fraudulent.\n' +
+        '  Refusing to send message for security reasons.'
+    );
+  }
+
+  // Verify that the accountId in the proof matches the recipient
+  if (proof.accountId !== recipientAccountId) {
+    throw new Error(
+      `⚠ SECURITY WARNING: Message box ${messageBoxId} is for account ${proof.accountId}, not ${recipientAccountId}!\n` +
+        `  This could be a misconfigured or fraudulent message box.\n` +
         `  Refusing to send message for security reasons.`
     );
   }
-  console.log('✓ Message box ownership verified');
 
-  const publicKey = await getPublicKeyFromFirstMessage(response.message);
+  // Get the recipient account's public key from Mirror Node
+  const { publicKey: recipientPublicKey, keyType: recipientKeyType } =
+    await getAccountPublicKey(recipientAccountId);
+
+  // Verify that the signer's public key matches the recipient's public key
+  if (proof.signerPublicKey !== recipientPublicKey) {
+    throw new Error(
+      `⚠ SECURITY WARNING: Message box ${messageBoxId} was NOT signed by account ${recipientAccountId}!\n` +
+        `  Expected public key: ${recipientPublicKey}\n` +
+        `  Signer public key: ${proof.signerPublicKey}\n` +
+        `  The account's public key may have changed, or this could be fraudulent.\n` +
+        `  Refusing to send message for security reasons.`
+    );
+  }
+
+  // Verify the signature against the payload (not including proof)
+  // Use canonical JSON to ensure deterministic serialization matches signing
+  const payloadToVerify = canonicalJSON(payload);
+  const isValid = verifySignature(
+    payloadToVerify,
+    proof.signature,
+    proof.signerPublicKey,
+    proof.signerKeyType
+  );
+
+  if (!isValid) {
+    throw new Error(
+      '⚠ SECURITY WARNING: Signature verification failed!\n' +
+        '  The first message signature is invalid.\n' +
+        '  This could be a tampered or fraudulent message box.\n' +
+        '  Refusing to send message for security reasons.'
+    );
+  }
+
+  console.log('✓ Message box ownership verified via signature');
+  console.log(`  Account: ${proof.accountId}`);
+  console.log(`  Verified with public key from Mirror Node`);
+
+  // Extract the encryption public key from the payload
+  const publicKey = payload.publicKey;
   console.log('⚙ Encrypting message...');
   const encryptedPayload = encryptMessage(message, publicKey);
   console.log('✓ Encrypted');
@@ -297,6 +413,68 @@ async function checkMessages(dataDir, accountId, startSequence, endSequence) {
 let pollingCache = { firstCall: true, lastSequenceNumber: 0 };
 
 /**
+ * Prompt user for yes/no confirmation
+ * @param {string} question - The question to ask
+ * @returns {Promise<boolean>} True if user confirms (yes/y), false otherwise
+ */
+async function promptYesNo(question) {
+  const readline = require('readline').createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  const answer = await new Promise(resolve => {
+    readline.question(question, ans => {
+      readline.close();
+      resolve(ans.toLowerCase().trim());
+    });
+  });
+
+  return answer === 'yes' || answer === 'y';
+}
+
+/**
+ * Get owner's private key from environment
+ * @returns {string} MESSAGE_BOX_OWNER_PRIVATE_KEY
+ * @throws {Error} If key is not set
+ */
+function getOwnerPrivateKey() {
+  const key = process.env.MESSAGE_BOX_OWNER_PRIVATE_KEY;
+  if (!key) {
+    throw new Error(
+      'MESSAGE_BOX_OWNER_PRIVATE_KEY not found in environment variables'
+    );
+  }
+  return key;
+}
+
+/**
+ * Canonicalize a JSON object for deterministic signing
+ * Sorts keys recursively and serializes to JSON
+ * This ensures the same object always produces the same string
+ * @param {Object} obj - Object to canonicalize
+ * @returns {string} Canonical JSON string
+ */
+function canonicalJSON(obj) {
+  if (obj === null || typeof obj !== 'object') {
+    return JSON.stringify(obj);
+  }
+
+  if (Array.isArray(obj)) {
+    return '[' + obj.map(item => canonicalJSON(item)).join(',') + ']';
+  }
+
+  // Sort keys alphabetically for deterministic ordering
+  const sortedKeys = Object.keys(obj).sort();
+  const pairs = sortedKeys.map(key => {
+    const value = canonicalJSON(obj[key]);
+    return JSON.stringify(key) + ':' + value;
+  });
+
+  return '{' + pairs.join(',') + '}';
+}
+
+/**
  * Parse message content supporting both JSON and CBOR formats
  * @param {Buffer} messageBuffer - Base64 decoded message buffer
  * @returns {Object|null} Parsed message object or null if parsing fails
@@ -392,33 +570,42 @@ function getEncryptionType() {
 async function getPublicKeyFromFirstMessage(message) {
   try {
     const messageContent = Buffer.from(message, 'base64').toString('utf8');
-    const parsed = JSON.parse(messageContent);
+    const firstMessage = JSON.parse(messageContent);
 
-    if (parsed.type === 'PUBLIC_KEY' && parsed.publicKey) {
-      const encryptionType = parsed.encryptionType || 'RSA';
+    // Require new structure with payload and proof
+    if (!firstMessage.payload) {
+      throw new Error(
+        'First message does not have the required structure with payload and proof'
+      );
+    }
+
+    const payload = firstMessage.payload;
+
+    if (payload.type === 'PUBLIC_KEY' && payload.publicKey) {
+      const encryptionType = payload.encryptionType || 'RSA';
       console.log(`✓ Public key retrieved from topic (${encryptionType})`);
 
       // Return the public key in the format expected by encryptMessage
       if (encryptionType === 'ECIES') {
-        // For ECIES, parsed.publicKey should already be an object with type, key, and curve
+        // For ECIES, payload.publicKey should already be an object with type, key, and curve
         if (
-          typeof parsed.publicKey === 'object' &&
-          parsed.publicKey.type === 'ECIES'
+          typeof payload.publicKey === 'object' &&
+          payload.publicKey.type === 'ECIES'
         ) {
           // Extract raw key if it's in DER format
-          const curve = parsed.publicKey.curve || 'secp256k1';
-          const rawKey = extractRawPublicKey(parsed.publicKey.key, curve);
+          const curve = payload.publicKey.curve || 'secp256k1';
+          const rawKey = extractRawPublicKey(payload.publicKey.key, curve);
 
           return {
             type: 'ECIES',
             key: rawKey,
             curve: curve,
           };
-        } else if (typeof parsed.publicKey === 'string') {
+        } else if (typeof payload.publicKey === 'string') {
           // Legacy format: if it's just a hex string, extract raw key and wrap it
           const curve =
-            parsed.publicKey.length === 66 ? 'secp256k1' : 'ed25519';
-          const rawKey = extractRawPublicKey(parsed.publicKey, curve);
+            payload.publicKey.length === 66 ? 'secp256k1' : 'ed25519';
+          const rawKey = extractRawPublicKey(payload.publicKey, curve);
 
           return {
             type: 'ECIES',
@@ -430,7 +617,7 @@ async function getPublicKeyFromFirstMessage(message) {
         }
       } else {
         // For RSA, return the PEM string directly
-        return parsed.publicKey;
+        return payload.publicKey;
       }
     }
     throw new Error('First message does not contain a public key');
@@ -484,25 +671,63 @@ async function listenForMessages(
 }
 
 /**
- * Publish public key to the message box topic
- * @param {import("@hashgraph/sdk").Client} client
- * @param {string} messageBoxId
- * @param {string|Object} publicKey
- * @param {string} encryptionType
+ * Publish public key to the message box topic with signature
+ * The message box owner signs the public key with their Hedera account's private key
+ * @param {import("@hashgraph/sdk").Client} client - Hedera client (operator pays for transaction)
+ * @param {string} messageBoxId - Topic ID for the message box
+ * @param {string|Object} publicKey - The encryption public key (RSA or ECIES)
+ * @param {string} encryptionType - 'RSA' or 'ECIES'
+ * @param {string} accountId - The account ID that owns this message box
  */
 async function publishPublicKey(
   client,
   messageBoxId,
   publicKey,
-  encryptionType
+  encryptionType,
+  accountId,
+  accountPrivateKey
 ) {
-  const message = JSON.stringify({
+  // Parse the account owner's private key
+  const { keyHex, keyType } = parseHederaPrivateKey(accountPrivateKey);
+
+  // Get account owner's public key (this will be verified by senders against Mirror Node)
+  const { publicKeyHex } = derivePublicKeyFromHederaKey(accountPrivateKey);
+
+  // Create the encryption public key payload (what senders will use to encrypt messages)
+  const payload = {
     type: 'PUBLIC_KEY',
     publicKey,
     encryptionType,
-  });
+  };
+
+  // Sign the payload with the account owner's private key
+  // This signature proves that the account owner authorized this message box
+  // Use canonical JSON to ensure deterministic serialization for signature verification
+  const payloadToSign = canonicalJSON(payload);
+  const signature = signMessage(payloadToSign, keyHex, keyType);
+
+  // Create the complete first message with payload and separate signature info
+  const firstMessage = {
+    payload, // The encryption public key information
+    proof: {
+      // The ownership proof (separate from payload)
+      accountId: accountId,
+      signerPublicKey: publicKeyHex,
+      signerKeyType: keyType,
+      signature: signature,
+    },
+  };
+
+  // Submit the signed message
+  // Note: The operator (client) pays for the transaction (could be a third party)
+  // but the signature proves the account owner authorized this message box
+  const message = JSON.stringify(firstMessage);
   await submitMessageToHCS(client, messageBoxId, message);
-  console.log(`✓ Public key published (${encryptionType})`);
+  console.log(
+    `✓ Public key published with signature (${encryptionType}, ${keyType})`
+  );
+  console.log(`  Account: ${accountId}`);
+  console.log(`  Signer public key: ${publicKeyHex.substring(0, 16)}...`);
 }
 
 /**
@@ -520,9 +745,14 @@ async function checkMessageBoxStatus(messageBoxId) {
     );
     try {
       const parsed = JSON.parse(content);
+      // Require a structure with payload and proof
+      if (!parsed.payload) {
+        return { exists: true, hasPublicKey: false };
+      }
+      const payload = parsed.payload;
       return {
         exists: true,
-        hasPublicKey: parsed.type === 'PUBLIC_KEY' && parsed.publicKey,
+        hasPublicKey: payload.type === 'PUBLIC_KEY' && payload.publicKey,
       };
     } catch {
       return { exists: true, hasPublicKey: false };
@@ -630,20 +860,16 @@ async function loadOrGenerateKeyPair(dataDir, encryptionType) {
 }
 
 /**
- * Generate ECIES key pair from operator's Hedera private key
+ * Generate ECIES key pair from message box owner's Hedera private key
  * @returns {{ publicKey: Object, privateKey: Object }} ECIES key pair
  */
 function loadECIESKeyPair() {
-  console.debug('⚙ Deriving ECIES key pair from operator credentials');
+  console.debug(
+    '⚙ Deriving ECIES key pair from message box owner credentials'
+  );
 
-  const operatorPrivateKey = process.env.HEDERA_PRIVATE_KEY;
-  if (!operatorPrivateKey) {
-    throw new Error('HEDERA_PRIVATE_KEY not found in environment variables');
-  }
-
-  // Parse the key to get its type first
-  const { keyHex, keyType, keyBytes } =
-    parseHederaPrivateKey(operatorPrivateKey);
+  const ownerPrivateKey = getOwnerPrivateKey();
+  const { keyHex, keyType, keyBytes } = parseHederaPrivateKey(ownerPrivateKey);
 
   // ECIES with native Node.js crypto only supports secp256k1
   // ED25519 cannot be used for ECDH (key exchange) - it's a signature scheme
@@ -671,7 +897,7 @@ function loadECIESKeyPair() {
             console.log('\n⚙ Switching to RSA encryption...');
             // Switch to RSA mode
             process.env.ENCRYPTION_TYPE = 'RSA';
-            const dataDir = process.env.DATA_DIR || './data';
+            const dataDir = process.env.RSA_DATA_DIR || './data';
             const rsaKeyPair = loadOrGenerateRSAKeyPair(dataDir);
             console.log(
               '\n💡 Tip: To make this permanent, set ENCRYPTION_TYPE=RSA in your .env file'
@@ -695,7 +921,7 @@ function loadECIESKeyPair() {
   }
 
   // Now derive the public key (safe because we verified it's SECP256K1)
-  const { publicKeyHex } = derivePublicKeyFromHederaKey(operatorPrivateKey);
+  const { publicKeyHex } = derivePublicKeyFromHederaKey(ownerPrivateKey);
 
   // Determine the curve to use
   const curve = 'secp256k1';

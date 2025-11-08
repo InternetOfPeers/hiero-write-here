@@ -376,9 +376,29 @@ npm run check-messages -- [start] [end]             # Read message history (defa
 npm run send-message -- <account id> <msg> [--cbor] # Send encrypted message to account
 npm run remove-message-box                          # Remove message box (clear account memo)
 npm run format                                      # Format code with Prettier
+npm test                                            # Run integration tests
 ```
 
 **Note:** Use `--` to separate npm options from script arguments when passing parameters.
+
+## Testing
+
+Run the integration test suite to verify all functionality:
+
+```bash
+npm test
+```
+
+The test suite covers:
+
+- Message box setup (new and existing)
+- Sending messages (JSON and CBOR formats)
+- Retrieving and decrypting messages
+- Message box reuse (idempotency)
+- Signature verification
+- Message box removal
+
+See [test/README.md](test/README.md) for detailed test documentation.
 
 ## Configuration Files
 
@@ -389,7 +409,7 @@ Required variables:
 ```text
 HEDERA_ACCOUNT_ID=0.0.xxxxx
 HEDERA_PRIVATE_KEY=302e020100300506032b657004220420...
-DATA_DIR=./data
+RSA_DATA_DIR=./data
 ```
 
 Optional variables:
@@ -422,6 +442,10 @@ MIRROR_NODE_URL=https://testnet.mirrornode.hedera.com
 - RSA mode: private key in `data/rsa_private.pem` for local decryption only
 - ECIES mode: operator key in `.env` used for transactions and decryption
 - ECIES provides forward secrecy (unique ephemeral key per message)
+- **Signature verification**: Message box ownership uses cryptographic signatures with canonical JSON serialization
+  - Ensures deterministic signature verification regardless of JSON property ordering
+  - Keys are sorted alphabetically before signing to prevent signature mismatch
+  - Verifies against account's public key from Mirror Node as authoritative source
 
 ## Troubleshooting
 

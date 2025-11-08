@@ -9,7 +9,7 @@ const {
 const https = require('https');
 const crypto = require('crypto');
 
-// Private functions
+// == Private functions ========================================================
 
 /**
  * Checks if a transaction was successful.
@@ -21,6 +21,40 @@ function isTransactionSuccessful(receipt) {
 }
 
 /**
+ * Helper to execute a transaction and get its receipt
+ * @param {import("@hashgraph/sdk").Transaction} transaction - The transaction to execute
+ * @param {import("@hashgraph/sdk").Client} client - The Hedera client
+ * @returns {Promise<import("@hashgraph/sdk").TransactionReceipt>} The transaction receipt
+ */
+async function executeAndGetReceipt(transaction, client) {
+  return transaction.execute(client).then(tx => tx.getReceipt(client));
+}
+
+/**
+ * Helper to sign and freeze transaction with owner private key if provided
+ * @param {import("@hashgraph/sdk").Transaction} transaction - The transaction to sign
+ * @param {import("@hashgraph/sdk").Client} client - The Hedera client
+ * @param {string} ownerPrivateKeyDer - DER-encoded private key
+ * @returns {Promise<void>}
+ */
+async function signWithOwnerKey(transaction, client, ownerPrivateKeyDer) {
+  if (ownerPrivateKeyDer) {
+    const ownerPrivateKey = PrivateKey.fromStringDer(ownerPrivateKeyDer);
+    await transaction.freezeWith(client);
+    transaction.sign(ownerPrivateKey);
+  }
+}
+
+/**
+ * Determine Hedera key type from SDK key object
+ * @param {import("@hashgraph/sdk").PrivateKey} key - Hedera private key object
+ * @returns {string} Key type: 'ED25519' or 'ECDSA_SECP256K1'
+ */
+function getHederaKeyType(key) {
+  return key.type === 'secp256k1' ? 'ECDSA_SECP256K1' : 'ED25519';
+}
+
+/**
  * Parse Hedera private key from DER format and extract key type and raw key bytes
  * @param {string} derPrivateKey - DER-encoded private key in hex format
  * @returns {Object} Object with keyType ('ED25519' or 'ECDSA_SECP256K1') and keyBytes (Buffer)
@@ -28,17 +62,14 @@ function isTransactionSuccessful(receipt) {
 function parseHederaPrivateKey(derPrivateKey) {
   try {
     const privateKey = PrivateKey.fromStringDer(derPrivateKey);
-
-    // Hedera SDK returns key type as string: 'ed25519' or 'secp256k1'
-    const keyTypeName =
-      privateKey.type === 'secp256k1' ? 'ECDSA_SECP256K1' : 'ED25519';
+    const keyType = getHederaKeyType(privateKey);
 
     // Use toBytesRaw() to get raw key bytes (32 bytes for both key types)
     const rawKeyBytes = Buffer.from(privateKey.toBytesRaw());
     const rawKeyHex = rawKeyBytes.toString('hex');
 
     return {
-      keyType: keyTypeName,
+      keyType,
       keyBytes: rawKeyBytes,
       keyHex: rawKeyHex,
       hederaPrivateKey: privateKey,
@@ -57,10 +88,7 @@ function derivePublicKeyFromHederaKey(derPrivateKey) {
   try {
     const privateKey = PrivateKey.fromStringDer(derPrivateKey);
     const publicKey = privateKey.publicKey;
-
-    // Hedera SDK returns key type as string: 'ed25519' or 'secp256k1'
-    const keyType =
-      privateKey.type === 'secp256k1' ? 'ECDSA_SECP256K1' : 'ED25519';
+    const keyType = getHederaKeyType(privateKey);
 
     // Use toBytesRaw() to get raw key bytes
     // For SECP256K1: 33 bytes (compressed public key)
@@ -85,13 +113,13 @@ function derivePublicKeyFromHederaKey(derPrivateKey) {
  * @returns {import("@hashgraph/sdk").Client} The initialized Hedera client.
  */
 function initializeClient() {
-  const operatorId = process.env.HEDERA_ACCOUNT_ID;
-  const operatorKey = process.env.HEDERA_PRIVATE_KEY;
+  const operatorId = process.env.PAYER_ACCOUNT_ID;
+  const operatorKey = process.env.PAYER_PRIVATE_KEY;
   const network = process.env.HEDERA_NETWORK || 'testnet';
 
   if (!operatorId || !operatorKey) {
     throw new Error(
-      '✗ Please set HEDERA_ACCOUNT_ID and HEDERA_PRIVATE_KEY environment variables'
+      '✗ Please set PAYER_ACCOUNT_ID and PAYER_PRIVATE_KEY environment variables'
     );
   }
 
@@ -122,7 +150,7 @@ function getMirrorNodeUrl() {
 
 /**
  * Helper function to make HTTPS requests to the Mirror Node
- * @param {string} endpoint - The API endpoint path (e.g., '/api/v1/accounts/0.0.123')
+ * @param {string} endpoint - The API endpoint path (e.g., '/accounts/0.0.123')
  * @param {Object} options - Request options
  * @param {boolean} [options.resolveOnError=false] - If true, resolves with null on error instead of rejecting
  * @returns {Promise<Object>} The parsed JSON response or response object with statusCode
@@ -174,7 +202,7 @@ async function mirrorNodeRequest(endpoint, options = {}) {
  * @returns {Promise<string>} The account memo.
  */
 async function getAccountMemo(accountId) {
-  const response = await mirrorNodeRequest(`/api/v1/accounts/${accountId}`);
+  const response = await mirrorNodeRequest(`/accounts/${accountId}`);
   return response.memo || '';
 }
 
@@ -184,7 +212,7 @@ async function getAccountMemo(accountId) {
  * @returns {Promise<boolean>} True if the account exists, false otherwise.
  */
 async function isValidAccount(accountId) {
-  const result = await mirrorNodeRequest(`/api/v1/accounts/${accountId}`, {
+  const result = await mirrorNodeRequest(`/accounts/${accountId}`, {
     resolveOnError: true,
   });
 
@@ -199,15 +227,23 @@ async function isValidAccount(accountId) {
 /**
  * Updates the account memo.
  * @param {import("@hashgraph/sdk").Client} client - The Hedera client.
+ * @param {string} accountId - The account ID to update
  * @param {string} memo - The memo text to set for the account.
+ * @param {string} [ownerPrivateKeyDer] - Optional DER-encoded private key of the account owner (required if owner != payer)
  * @returns {Promise<{success: boolean, error?: string}>} The result of the update operation.
  */
-async function updateAccountMemo(client, accountId, memo) {
-  const receipt = await new AccountUpdateTransaction()
+async function updateAccountMemo(
+  client,
+  accountId,
+  memo,
+  ownerPrivateKeyDer = null
+) {
+  const transaction = new AccountUpdateTransaction()
     .setAccountId(accountId)
-    .setAccountMemo(memo)
-    .execute(client)
-    .then(tx => tx.getReceipt(client));
+    .setAccountMemo(memo);
+
+  await signWithOwnerKey(transaction, client, ownerPrivateKeyDer);
+  const receipt = await executeAndGetReceipt(transaction, client);
 
   const success = isTransactionSuccessful(receipt);
   console.debug(
@@ -221,16 +257,27 @@ async function updateAccountMemo(client, accountId, memo) {
 }
 
 /**
- * Creates a new topic with a memo indicating the operator listens for messages there.
+ * Creates a new topic with a memo indicating the owner listens for messages there.
  * @param {import("@hashgraph/sdk").Client} client - The Hedera client.
+ * @param {string} memo - The topic memo
+ * @param {string} [ownerPrivateKeyDer] - Optional DER-encoded private key of the topic owner (required if owner != payer)
  * @returns {Promise<{success: boolean, topicId?: string, error?: string}>} The result of the topic creation.
  */
-async function createTopic(client, memo) {
-  const receipt = await new TopicCreateTransaction()
+async function createTopic(client, memo, ownerPrivateKeyDer = null) {
+  // Use owner's public key if provided, otherwise use operator's public key
+  const adminKey = ownerPrivateKeyDer
+    ? PrivateKey.fromStringDer(ownerPrivateKeyDer)
+    : null;
+  const adminPublicKey = adminKey
+    ? adminKey.publicKey
+    : client.operatorPublicKey;
+
+  const transaction = new TopicCreateTransaction()
     .setTopicMemo(memo)
-    .setAdminKey(client.operatorPublicKey)
-    .execute(client)
-    .then(tx => tx.getReceipt(client));
+    .setAdminKey(adminPublicKey);
+
+  await signWithOwnerKey(transaction, client, ownerPrivateKeyDer);
+  const receipt = await executeAndGetReceipt(transaction, client);
 
   const success = isTransactionSuccessful(receipt);
   console.debug(
@@ -243,15 +290,14 @@ async function createTopic(client, memo) {
 
 /**
  * Send a message to a topic.
- * @param {*} client
- * @param {*} topicId
- * @param {*} message
- * @returns
+ * @param {import("@hashgraph/sdk").Client} client - The Hedera client
+ * @param {string} topicId - The topic ID
+ * @param {string} message - The message to submit
+ * @returns {Promise<{success: boolean, topicId?: string, error?: string}>} The result of the submission
  */
 async function submitMessageToHCS(client, topicId, message) {
-  const receipt = await new TopicMessageSubmitTransaction({ topicId, message })
-    .execute(client)
-    .then(tx => tx.getReceipt(client));
+  const transaction = new TopicMessageSubmitTransaction({ topicId, message });
+  const receipt = await executeAndGetReceipt(transaction, client);
 
   const success = isTransactionSuccessful(receipt);
   console.debug(
@@ -287,7 +333,7 @@ async function queryTopicMessages(topicId, options = {}) {
   }
 
   const queryString = params.toString();
-  const endpoint = `/api/v1/topics/${topicId}/messages${queryString ? `?${queryString}` : ''}`;
+  const endpoint = `/topics/${topicId}/messages${queryString ? `?${queryString}` : ''}`;
 
   return mirrorNodeRequest(endpoint);
 }
@@ -530,6 +576,49 @@ async function getMessagesInRange(topicId, startSequence, endSequence) {
   }
 }
 
+/**
+ * Get account's public key from Mirror Node
+ * @param {string} accountId - Account ID (e.g., '0.0.1234')
+ * @returns {Promise<{publicKey: string, keyType: string}>} Public key in hex and key type
+ */
+async function getAccountPublicKey(accountId) {
+  try {
+    const data = await mirrorNodeRequest(`/accounts/${accountId}`);
+    if (!data.key) {
+      throw new Error(`No key found for account ${accountId}`);
+    }
+
+    // The key object contains the public key in various formats
+    // key.key contains the hex-encoded public key
+    const publicKeyHex = data.key.key;
+
+    // Determine key type from the key structure
+    // ED25519 keys are 32 bytes (64 hex chars)
+    // SECP256K1 keys are 33 bytes (66 hex chars) when compressed
+    let keyType;
+    if (data.key._type === 'ED25519' || publicKeyHex.length === 64) {
+      keyType = 'ED25519';
+    } else if (
+      data.key._type === 'ECDSA_SECP256K1' ||
+      publicKeyHex.length === 66
+    ) {
+      keyType = 'ECDSA_SECP256K1';
+    } else {
+      // Try to determine from length
+      keyType = publicKeyHex.length === 64 ? 'ED25519' : 'ECDSA_SECP256K1';
+    }
+
+    return {
+      publicKey: publicKeyHex,
+      keyType,
+    };
+  } catch (error) {
+    throw new Error(
+      `Failed to get public key for account ${accountId}: ${error.message}`
+    );
+  }
+}
+
 // == Exports =================================================================
 
 module.exports = {
@@ -545,4 +634,5 @@ module.exports = {
   getMessagesInRange,
   parseHederaPrivateKey,
   derivePublicKeyFromHederaKey,
+  getAccountPublicKey,
 };

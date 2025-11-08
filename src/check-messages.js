@@ -1,13 +1,17 @@
-const { loadEnvFile } = require('./lib/common');
+const { loadEnvFile } = require('./lib/crypto');
 const { checkMessages } = require('./lib/message-box');
 
 async function main() {
   try {
     loadEnvFile();
+    const accountId = process.env.MESSAGE_BOX_OWNER_ACCOUNT_ID;
+    if (!accountId) {
+      throw new Error('MESSAGE_BOX_OWNER_ACCOUNT_ID is required.');
+    }
+
     const args = process.argv.slice(2);
     const startSequence = args[0] ? parseInt(args[0]) : 2;
     const endSequence = args[1] ? parseInt(args[1]) : undefined;
-    const accountID = process.env.HEDERA_ACCOUNT_ID;
 
     if (isNaN(startSequence) || startSequence < 1) {
       console.error('\n✗ Error: Start sequence must be a positive number');
@@ -37,11 +41,11 @@ async function main() {
       process.exit(1);
     }
 
-    console.log(`⚙ Checking messages for account ${accountID}`);
+    console.log(`⚙ Checking messages for account ${accountId}`);
 
     const messages = await checkMessages(
-      process.env.DATA_DIR,
-      accountID,
+      process.env.RSA_DATA_DIR,
+      accountId,
       startSequence,
       endSequence
     );

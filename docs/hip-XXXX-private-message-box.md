@@ -400,7 +400,7 @@ All messages after the first MUST be encrypted using the published public key. M
 1. Query recipient account memo via Mirror Node
 2. Extract message box topic ID
 3. Retrieve first message from topic via Mirror Node
-4. **MUST verify that the first message payer account ID matches the intended recipient account ID**
+4. **MUST verify that the first message signature matches the intended recipient admin key**
    - If mismatch detected: warn user and refuse to send message
    - This prevents sending messages to compromised or fraudulent message boxes
 5. Parse public key and encryption type
@@ -434,8 +434,6 @@ GET /api/v1/accounts/{accountId}
 ```http
 GET /api/v1/topics/{topicId}/messages
 ```
-
-The response includes the `payer_account_id` field for each message, which MUST be verified against the intended recipient account ID when retrieving the first message (public key).
 
 **Filtering Messages:**
 
@@ -489,7 +487,7 @@ Implementations MUST handle the following error cases:
 - Topic does not exist
 - Topic has no messages
 - First message is not a valid PUBLIC_KEY message
-- **First message payer account ID does not match recipient account ID**
+- First message signature does not match recipient admin key\*\*
 - Action: Return error indicating invalid message box configuration
 
 **Encryption Errors:**
@@ -513,6 +511,41 @@ Implementations MUST handle the following error cases:
 Although unlikely, considering that the topic is permissionless, a malicious user can technically send the first message before the correct owner of the message box has the possibility to do it, especially if the client is implemented incorrectly or there are unexpected issues between the creation of the topic and the sending of the first message. This can cause problems if the owner of the message box does not immediately notice the issue, so the risk is users starts sending private messages to malicious users.
 
 To solve this problem, the message box owner must sign the first message payload, and the sender must verify that the first message payload's signature correspond with the message box owner admnin key.
+
+**Deterministic Signature Serialization:**
+
+For cryptographic signature verification to work reliably, implementations MUST use canonical JSON serialization when signing and verifying the first message payload. This is critical because:
+
+- Standard `JSON.stringify()` does not guarantee property order across different JavaScript engines or implementations
+- Property order differences between signing and verification would cause signature verification to fail
+- Canonical JSON ensures the exact same string is generated for signing and verification
+
+**Canonical JSON Requirements:**
+
+1. All object keys MUST be sorted alphabetically
+2. Nested objects and arrays MUST be recursively canonicalized
+3. No whitespace between elements (compact representation)
+4. The same object MUST always produce the identical string representation
+
+**Example Implementation Pattern:**
+
+```javascript
+function canonicalJSON(obj) {
+  if (obj === null || typeof obj !== 'object') {
+    return JSON.stringify(obj);
+  }
+  if (Array.isArray(obj)) {
+    return '[' + obj.map(item => canonicalJSON(item)).join(',') + ']';
+  }
+  const sortedKeys = Object.keys(obj).sort();
+  const pairs = sortedKeys.map(key => {
+    return JSON.stringify(key) + ':' + canonicalJSON(obj[key]);
+  });
+  return '{' + pairs.join(',') + '}';
+}
+```
+
+Implementations in other languages MUST follow the same canonicalization rules to ensure interoperability.
 
 **Message Privacy:**
 

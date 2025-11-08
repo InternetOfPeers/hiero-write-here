@@ -145,12 +145,12 @@ function loadEnvFile() {
 
   if (!fs.existsSync(ENV_FILE)) {
     console.debug('.env file not found.');
-    if (!process.env.DATA_DIR)
-      process.env.DATA_DIR = path.join(PROJECT_ROOT, 'data');
+    if (!process.env.RSA_DATA_DIR)
+      process.env.RSA_DATA_DIR = path.join(PROJECT_ROOT, 'data');
     if (!process.env.PRIVATE_KEY_FILE)
-      process.env.PRIVATE_KEY_FILE = path.join(DATA_DIR, 'rsa_private.pem');
+      process.env.PRIVATE_KEY_FILE = path.join(RSA_DATA_DIR, 'rsa_private.pem');
     if (!process.env.PUBLIC_KEY_FILE)
-      process.env.PUBLIC_KEY_FILE = path.join(DATA_DIR, 'rsa_public.pem');
+      process.env.PUBLIC_KEY_FILE = path.join(RSA_DATA_DIR, 'rsa_public.pem');
     return;
   }
 
@@ -568,6 +568,239 @@ function findProjectRoot(startDir = __dirname) {
   return startDir;
 }
 
+/**
+ * Create DER-encoded PKCS#8 private key for ED25519
+ * @param {Buffer} privateKeyBuffer - 32-byte private key
+ * @returns {Buffer} DER-encoded private key
+ */
+function createED25519PrivateKeyDER(privateKeyBuffer) {
+  const derPrefix = Buffer.from([
+    0x30,
+    0x2e, // SEQUENCE, length 46
+    0x02,
+    0x01,
+    0x00, // INTEGER version 0
+    0x30,
+    0x05, // SEQUENCE, length 5
+    0x06,
+    0x03,
+    0x2b,
+    0x65,
+    0x70, // OID 1.3.101.112 (Ed25519)
+    0x04,
+    0x22, // OCTET STRING, length 34
+    0x04,
+    0x20, // OCTET STRING, length 32 (the actual key)
+  ]);
+  return Buffer.concat([derPrefix, privateKeyBuffer]);
+}
+
+/**
+ * Create DER-encoded SEC1 private key for ECDSA secp256k1
+ * @param {Buffer} privateKeyBuffer - 32-byte private key
+ * @param {Buffer} publicKeyBuffer - 65-byte uncompressed public key
+ * @returns {Buffer} DER-encoded private key
+ */
+function createECDSAPrivateKeyDER(privateKeyBuffer, publicKeyBuffer) {
+  const derPrefix = Buffer.from([
+    0x30,
+    0x74, // SEQUENCE, length 116
+    0x02,
+    0x01,
+    0x01, // INTEGER version 1
+    0x04,
+    0x20, // OCTET STRING, length 32 (the private key)
+  ]);
+
+  const curveOid = Buffer.from([
+    0xa0,
+    0x07, // Context-specific [0], length 7
+    0x06,
+    0x05,
+    0x2b,
+    0x81,
+    0x04,
+    0x00,
+    0x0a, // OID 1.3.132.0.10 (secp256k1)
+  ]);
+
+  const publicKeyPart = Buffer.concat([
+    Buffer.from([0xa1, 0x44, 0x03, 0x42, 0x00]), // Context-specific [1], BIT STRING
+    publicKeyBuffer,
+  ]);
+
+  return Buffer.concat([derPrefix, privateKeyBuffer, curveOid, publicKeyPart]);
+}
+
+/**
+ * Create DER-encoded SPKI public key for ED25519
+ * @param {Buffer} publicKeyBuffer - 32-byte public key
+ * @returns {Buffer} DER-encoded public key
+ */
+function createED25519PublicKeyDER(publicKeyBuffer) {
+  const derPrefix = Buffer.from([
+    0x30,
+    0x2a, // SEQUENCE, length 42
+    0x30,
+    0x05, // SEQUENCE, length 5
+    0x06,
+    0x03,
+    0x2b,
+    0x65,
+    0x70, // OID 1.3.101.112 (Ed25519)
+    0x03,
+    0x21,
+    0x00, // BIT STRING, length 33, no unused bits
+  ]);
+  return Buffer.concat([derPrefix, publicKeyBuffer]);
+}
+
+/**
+ * Create DER-encoded SPKI public key for ECDSA secp256k1
+ * @param {Buffer} publicKeyBuffer - 33 or 65 byte public key
+ * @returns {Buffer} DER-encoded public key
+ */
+function createECDSAPublicKeyDER(publicKeyBuffer) {
+  const keyLength = publicKeyBuffer.length;
+  const algorithmIdLength = 18;
+  const bitStringHeaderLength = 3;
+  const sequenceContentLength =
+    algorithmIdLength + bitStringHeaderLength + keyLength;
+
+  return Buffer.concat([
+    Buffer.from([0x30, sequenceContentLength]), // SEQUENCE with total length
+    Buffer.from([
+      0x30,
+      0x10, // SEQUENCE, length 16 (algorithm identifier)
+      0x06,
+      0x07,
+      0x2a,
+      0x86,
+      0x48,
+      0xce,
+      0x3d,
+      0x02,
+      0x01, // OID for EC public key
+      0x06,
+      0x05,
+      0x2b,
+      0x81,
+      0x04,
+      0x00,
+      0x0a, // OID for secp256k1 curve
+    ]),
+    Buffer.from([0x03, keyLength + 1, 0x00]), // BIT STRING tag, length, no unused bits
+    publicKeyBuffer,
+  ]);
+}
+
+/**
+ * Sign a message using ED25519 or ECDSA (secp256k1)
+ * @param {string} message - Message to sign (will be hashed with SHA-256 for ECDSA)
+ * @param {string} privateKeyHex - Private key in hex format (32 bytes)
+ * @param {string} keyType - 'ED25519' or 'ECDSA_SECP256K1'
+ * @returns {string} Signature in hex format
+ */
+function signMessage(message, privateKeyHex, keyType) {
+  try {
+    const messageBuffer = Buffer.from(message, 'utf8');
+    const privateKeyBuffer = Buffer.from(privateKeyHex, 'hex');
+
+    if (keyType === 'ED25519') {
+      const derKey = createED25519PrivateKeyDER(privateKeyBuffer);
+      const privateKeyObj = crypto.createPrivateKey({
+        key: derKey,
+        format: 'der',
+        type: 'pkcs8',
+      });
+      const signature = crypto.sign(null, messageBuffer, privateKeyObj);
+      return signature.toString('hex');
+    } else if (keyType === 'ECDSA_SECP256K1') {
+      // Derive public key from private key for the DER structure
+      const ecdh = crypto.createECDH('secp256k1');
+      ecdh.setPrivateKey(privateKeyBuffer);
+      const publicKeyBuffer = ecdh.getPublicKey();
+
+      const derKey = createECDSAPrivateKeyDER(
+        privateKeyBuffer,
+        publicKeyBuffer
+      );
+      const privateKeyObj = crypto.createPrivateKey({
+        key: derKey,
+        format: 'der',
+        type: 'sec1',
+      });
+      const signature = crypto.sign('SHA256', messageBuffer, privateKeyObj);
+      return signature.toString('hex');
+    } else {
+      throw new Error(`Unsupported key type for signing: ${keyType}`);
+    }
+  } catch (error) {
+    throw new Error(`Failed to sign message: ${error.message}`);
+  }
+}
+
+/**
+ * Verify a message signature using ED25519 or ECDSA (secp256k1)
+ * @param {string} message - Original message that was signed
+ * @param {string} signatureHex - Signature in hex format
+ * @param {string} publicKeyHex - Public key in hex format
+ * @param {string} keyType - 'ED25519' or 'ECDSA_SECP256K1'
+ * @returns {boolean} True if signature is valid
+ */
+function verifySignature(message, signatureHex, publicKeyHex, keyType) {
+  try {
+    const messageBuffer = Buffer.from(message, 'utf8');
+    const signatureBuffer = Buffer.from(signatureHex, 'hex');
+    const publicKeyBuffer = Buffer.from(publicKeyHex, 'hex');
+    if (keyType === 'ED25519') {
+      // For ED25519, construct DER format SPKI public key
+      // SPKI structure for ED25519: 44 bytes total
+      const derPrefix = Buffer.from([
+        0x30,
+        0x2a, // SEQUENCE, length 42
+        0x30,
+        0x05, // SEQUENCE, length 5
+        0x06,
+        0x03,
+        0x2b,
+        0x65,
+        0x70, // OID 1.3.101.112 (Ed25519)
+        0x03,
+        0x21,
+        0x00, // BIT STRING, length 33, no unused bits
+      ]);
+      const derKey = Buffer.concat([derPrefix, publicKeyBuffer]);
+
+      const publicKeyObj = crypto.createPublicKey({
+        key: derKey,
+        format: 'der',
+        type: 'spki',
+      });
+
+      // Verify the signature (ED25519 doesn't pre-hash)
+      return crypto.verify(null, messageBuffer, publicKeyObj, signatureBuffer);
+    } else if (keyType === 'ECDSA_SECP256K1') {
+      const derKey = createECDSAPublicKeyDER(publicKeyBuffer);
+      const publicKeyObj = crypto.createPublicKey({
+        key: derKey,
+        format: 'der',
+        type: 'spki',
+      });
+      return crypto.verify(
+        'SHA256',
+        messageBuffer,
+        publicKeyObj,
+        signatureBuffer
+      );
+    } else {
+      throw new Error(`Unsupported key type for verification: ${keyType}`);
+    }
+  } catch (error) {
+    throw new Error(`Failed to verify signature: ${error.message}`);
+  }
+}
+
 // == Exports =================================================================
 
 module.exports = {
@@ -576,4 +809,6 @@ module.exports = {
   decryptMessage,
   encodeCBOR,
   decodeCBOR,
+  signMessage,
+  verifySignature,
 };
