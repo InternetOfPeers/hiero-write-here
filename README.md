@@ -4,12 +4,20 @@ Hiero Message Box is a simple way for users to set up a message box and receive 
 
 [View the interactive presentation](https://internetofpeers.org/hiero-message-box/presentation.html) to visualize the message box flow.
 
+## Quick start
+
 The repo contains the code both for the sender and the receiver.
 
 The goal is to enable users to send encrypted messages to an account's message box just like this:
 
 ```bash
 npm run send-message -- 0.0.1441 "This is a secret message for you"
+```
+
+Users can create the message box with this command:
+
+```bash
+npm run setup-message-box
 ```
 
 Users can listen for new messages in real-time using this command:
@@ -515,19 +523,6 @@ MIRROR_NODE_URL=https://testnet.mirrornode.hedera.com
 - **ECIES with ED25519**: ED25519 doesn't support ECIES—use RSA or SECP256K1 account
 - **Mirror Node errors**: Check internet and verify `MIRROR_NODE_URL` matches network
 
-## Performance Comparison
-
-### Encryption Operations
-
-| Operation       | RSA-2048  | ECIES (secp256k1) |
-| --------------- | --------- | ----------------- |
-| Key Generation  | ~50ms     | <1ms (derived)    |
-| Encryption      | ~2ms      | ~1ms              |
-| Decryption      | ~3ms      | ~1ms              |
-| Public Key Size | 294 bytes | 33 bytes          |
-
-Note: Times are approximate and vary by system.
-
 ## Migration Guide
 
 ### Switching Encryption Types
@@ -539,8 +534,6 @@ Note: Times are approximate and vary by system.
 **Note:** ECIES requires SECP256K1 key (not ED25519).
 
 ## Additional Documentation
-
-- **Interactive Presentation**: Open `docs/presentation.html` in a browser for an animated flow visualization
 
 ## References
 
