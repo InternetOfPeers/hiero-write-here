@@ -228,6 +228,7 @@ async function updateAccountMemo(client, accountId, memo) {
 async function createTopic(client, memo) {
   const receipt = await new TopicCreateTransaction()
     .setTopicMemo(memo)
+    .setAdminKey(client.operatorPublicKey)
     .execute(client)
     .then(tx => tx.getReceipt(client));
 

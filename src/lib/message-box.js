@@ -21,16 +21,6 @@ const {
   decodeCBOR,
 } = require('./common');
 
-// == Private helper functions ================================================
-
-/**
- * Get the encryption type from environment
- * @returns {string} 'RSA' or 'ECIES'
- */
-function getEncryptionType() {
-  return (process.env.ENCRYPTION_TYPE || 'RSA').toUpperCase();
-}
-
 // == Public functions ========================================================
 
 /**
@@ -96,7 +86,7 @@ async function setupMessageBox(client, dataDir, accountId) {
   if (needsNewMessageBox) {
     const result = await createTopic(
       client,
-      `[HIP-9999:${client.operatorAccountId}] ${client.operatorAccountId} listens here for HIP-9999 encrypted messages.`
+      `[HIP-XXXX:${client.operatorAccountId}] ${client.operatorAccountId} listens here for HIP-XXXX encrypted messages.`
     );
     if (!result.success)
       throw new Error(`Failed to create new message box: ${result.error}`);
@@ -106,7 +96,7 @@ async function setupMessageBox(client, dataDir, accountId) {
     await updateAccountMemo(
       client,
       accountId,
-      `[HIP-9999:${newMessageBoxId}] If you want to contact me, send HIP-9999 encrypted messages to ${newMessageBoxId}.`
+      `[HIP-XXXX:${newMessageBoxId}] If you want to contact me, send HIP-XXXX encrypted messages to ${newMessageBoxId}.`
     );
     console.log(
       `✓ Message box ${newMessageBoxId} set up correctly for account ${accountId} (encryption: ${encryptionType})`
@@ -169,9 +159,29 @@ async function sendMessage(client, recipientAccountId, message, options = {}) {
     throw new Error(
       `Message box ID not found for account ${recipientAccountId}`
     );
-
   console.log(`✓ Message box ID: ${messageBoxId}`);
-  const publicKey = await getPublicKeyFromTopic(messageBoxId);
+
+  console.log('⚙ Getting first message from message box...');
+  const response = await getFirstTopicMessage(messageBoxId);
+  if (!response.message) throw new Error('No messages found in topic');
+  console.log('✓ First message retrieved');
+
+  console.log('⚙ Verifying message box ownership...');
+  const payerAccountId = response.payer_account_id;
+  if (!payerAccountId) {
+    throw new Error('Payer account ID not found in first message');
+  }
+  if (payerAccountId !== recipientAccountId) {
+    throw new Error(
+      `⚠ SECURITY WARNING: Message box ${messageBoxId} was NOT created by account ${recipientAccountId}!\n` +
+        `  The first message was sent by: ${payerAccountId}\n` +
+        `  This could be a compromised or fraudulent message box.\n` +
+        `  Refusing to send message for security reasons.`
+    );
+  }
+  console.log('✓ Message box ownership verified');
+
+  const publicKey = await getPublicKeyFromFirstMessage(response.message);
   console.log('⚙ Encrypting message...');
   const encryptedPayload = encryptMessage(message, publicKey);
   console.log('✓ Encrypted');
@@ -367,6 +377,69 @@ function formatMessage(msg, privateKey, encryptionType) {
 }
 
 /**
+ * Get the encryption type from environment
+ * @returns {string} 'RSA' or 'ECIES'
+ */
+function getEncryptionType() {
+  return (process.env.ENCRYPTION_TYPE || 'RSA').toUpperCase();
+}
+
+/**
+ * Get public key from topic message
+ * @param {string} message - Base64 encoded message content
+ * @returns {Promise<string|Object>} Public key (PEM string for RSA, object for ECIES)
+ */
+async function getPublicKeyFromFirstMessage(message) {
+  try {
+    const messageContent = Buffer.from(message, 'base64').toString('utf8');
+    const parsed = JSON.parse(messageContent);
+
+    if (parsed.type === 'PUBLIC_KEY' && parsed.publicKey) {
+      const encryptionType = parsed.encryptionType || 'RSA';
+      console.log(`✓ Public key retrieved from topic (${encryptionType})`);
+
+      // Return the public key in the format expected by encryptMessage
+      if (encryptionType === 'ECIES') {
+        // For ECIES, parsed.publicKey should already be an object with type, key, and curve
+        if (
+          typeof parsed.publicKey === 'object' &&
+          parsed.publicKey.type === 'ECIES'
+        ) {
+          // Extract raw key if it's in DER format
+          const curve = parsed.publicKey.curve || 'secp256k1';
+          const rawKey = extractRawPublicKey(parsed.publicKey.key, curve);
+
+          return {
+            type: 'ECIES',
+            key: rawKey,
+            curve: curve,
+          };
+        } else if (typeof parsed.publicKey === 'string') {
+          // Legacy format: if it's just a hex string, extract raw key and wrap it
+          const curve =
+            parsed.publicKey.length === 66 ? 'secp256k1' : 'ed25519';
+          const rawKey = extractRawPublicKey(parsed.publicKey, curve);
+
+          return {
+            type: 'ECIES',
+            key: rawKey,
+            curve: curve,
+          };
+        } else {
+          throw new Error('Invalid ECIES public key format');
+        }
+      } else {
+        // For RSA, return the PEM string directly
+        return parsed.publicKey;
+      }
+    }
+    throw new Error('First message does not contain a public key');
+  } catch (error) {
+    throw new Error(`Failed to get public key from topic: ${error.message}`);
+  }
+}
+
+/**
  * Listen for messages
  * @param {boolean} isFirstPoll
  * @param {string} topicId
@@ -501,61 +574,6 @@ function extractRawPublicKey(keyHex, keyType = 'secp256k1') {
   return keyHex;
 }
 
-async function getPublicKeyFromTopic(topicId) {
-  try {
-    const response = await getFirstTopicMessage(topicId);
-    if (!response.message) throw new Error('No messages found in topic');
-
-    const messageContent = Buffer.from(response.message, 'base64').toString(
-      'utf8'
-    );
-    const parsed = JSON.parse(messageContent);
-
-    if (parsed.type === 'PUBLIC_KEY' && parsed.publicKey) {
-      const encryptionType = parsed.encryptionType || 'RSA';
-      console.log(`✓ Public key retrieved from topic (${encryptionType})`);
-
-      // Return the public key in the format expected by encryptMessage
-      if (encryptionType === 'ECIES') {
-        // For ECIES, parsed.publicKey should already be an object with type, key, and curve
-        if (
-          typeof parsed.publicKey === 'object' &&
-          parsed.publicKey.type === 'ECIES'
-        ) {
-          // Extract raw key if it's in DER format
-          const curve = parsed.publicKey.curve || 'secp256k1';
-          const rawKey = extractRawPublicKey(parsed.publicKey.key, curve);
-
-          return {
-            type: 'ECIES',
-            key: rawKey,
-            curve: curve,
-          };
-        } else if (typeof parsed.publicKey === 'string') {
-          // Legacy format: if it's just a hex string, extract raw key and wrap it
-          const curve =
-            parsed.publicKey.length === 66 ? 'secp256k1' : 'ed25519';
-          const rawKey = extractRawPublicKey(parsed.publicKey, curve);
-
-          return {
-            type: 'ECIES',
-            key: rawKey,
-            curve: curve,
-          };
-        } else {
-          throw new Error('Invalid ECIES public key format');
-        }
-      } else {
-        // For RSA, return the PEM string directly
-        return parsed.publicKey;
-      }
-    }
-    throw new Error('First message does not contain a public key');
-  } catch (error) {
-    throw new Error(`Failed to get public key from topic: ${error.message}`);
-  }
-}
-
 /**
  * Check if the provided private key can decrypt messages encrypted with the public key from the topic.
  * @param {string} messageBoxId
@@ -569,12 +587,14 @@ async function verifyKeyPairMatchesTopic(
   encryptionType
 ) {
   try {
-    const messageBoxPublicKey = await getPublicKeyFromTopic(messageBoxId);
+    console.log('⚙ Getting first message from message box...');
+    const response = await getFirstTopicMessage(messageBoxId);
+    if (!response.message) throw new Error('No messages found in topic');
+    console.log('✓ First message retrieved');
 
-    // Check if encryption types match
+    const publicKey = await getPublicKeyFromFirstMessage(response.message);
     const topicEncryptionType =
-      typeof messageBoxPublicKey === 'object' &&
-      messageBoxPublicKey.type === 'ECIES'
+      typeof publicKey === 'object' && publicKey.type === 'ECIES'
         ? 'ECIES'
         : 'RSA';
 
@@ -586,7 +606,7 @@ async function verifyKeyPairMatchesTopic(
     }
 
     const testMessage = 'key_verification_test';
-    const encrypted = encryptMessage(testMessage, messageBoxPublicKey);
+    const encrypted = encryptMessage(testMessage, publicKey);
     const decrypted = decryptMessage(encrypted, privateKey);
     return decrypted === testMessage;
   } catch (error) {
@@ -744,12 +764,12 @@ function getPublicKeyFilePath(dataDir) {
 }
 
 /**
- * Extract message box ID from memo. Expected format: "[HIP-9999:0.0.xxxxx]"
+ * Extract message box ID from memo. Expected format: "[HIP-XXXX:0.0.xxxxx]"
  * @param {string} memo
  * @returns {string|null} Message box ID or null if not found
  */
 function extractMessageBoxIdFromMemo(memo) {
-  const match = memo.match(/\[HIP-9999:(0\.0\.\d+)\]/);
+  const match = memo.match(/\[HIP-XXXX:(0\.0\.\d+)\]/);
   return match ? match[1] : null;
 }
 

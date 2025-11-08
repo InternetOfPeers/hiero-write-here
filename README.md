@@ -24,7 +24,7 @@ Users can also check for historical messages using this command:
 npm run check-messages -- [start-sequence] [end-sequence]
 ```
 
-On first setup, the program generates/derives encryption keys, creates a Hedera topic as your message box, and updates your account memo with the topic ID in HIP-9999 format.
+On first setup, the program generates/derives encryption keys, creates a Hedera topic as your message box, and updates your account memo with the topic ID in HIP-XXXX format.
 
 ## Features
 
@@ -138,7 +138,7 @@ The setup process:
 2. Checks existing message box in account memo
 3. Verifies keys can decrypt messages
 4. Creates new topic if needed, publishes public key
-5. Updates account memo with topic ID: `[HIP-9999:0.0.xxxxx]`
+5. Updates account memo with topic ID: `[HIP-XXXX:0.0.xxxxx]`
 
 ### Listen for New Messages
 
